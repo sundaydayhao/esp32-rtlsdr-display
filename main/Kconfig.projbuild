@@ -1,0 +1,188 @@
+menu "RTL-SDR Waterfall"
+
+    menu "Radio"
+        config RTLSDR_BASEBAND_INIT
+            bool "Run RTL2832U baseband initialization"
+            default y
+            help
+                Sends a compact RTL2832U baseband startup sequence before streaming.
+                This does not yet program the external R820T/R828D tuner PLL.
+
+        config RTLSDR_CENTER_FREQ_HZ
+            int "Center frequency in Hz"
+            default 100000000
+            help
+                Displayed center frequency. Full R820T/R828D PLL tuning is isolated
+                for the next bring-up step in main/rtlsdr.c.
+
+        config RTLSDR_SAMPLE_RATE
+            int "Sample rate in samples per second"
+            default 1024000
+            range 225001 2400000
+            help
+                RTL2832U complex sample rate. Start low during bring-up.
+
+        config RTLSDR_BULK_TRANSFER_SIZE
+            int "USB bulk transfer size in bytes"
+            default 16384
+            range 4096 65536
+
+        config RTLSDR_NUM_TRANSFERS
+            int "Queued USB bulk transfers"
+            default 4
+            range 2 8
+
+        config RTLSDR_TUNER_GAIN_TENTHS_DB
+            int "Tuner gain in tenths of dB"
+            default 0
+            help
+                Reserved for the external tuner driver. Zero means automatic gain
+                once tuner gain control is implemented.
+    endmenu
+
+    menu "FFT"
+        config WATERFALL_FFT_SIZE
+            int "FFT size"
+            default 512
+            range 64 1024
+            help
+                Must be a power of two. Larger values give better frequency resolution but use more CPU.
+
+        config WATERFALL_AVERAGE_SHIFT
+            int "Magnitude averaging shift"
+            default 2
+            range 0 6
+            help
+                Higher values smooth the display more.
+
+        config WATERFALL_TARGET_FPS
+            int "Waterfall display refresh rate"
+            default 20
+            range 1 60
+            help
+                Limits how many FFT lines per second are rendered. The SDR stream is
+                still consumed continuously, but intermediate FFT windows are skipped
+                so the LCD task does not starve the idle task watchdog.
+
+        config WATERFALL_DB_MIN
+            int "Waterfall minimum dB"
+            default -80
+
+        config WATERFALL_DB_MAX
+            int "Waterfall maximum dB"
+            default -20
+    endmenu
+
+    menu "LCD"
+        config LCD_H_RES
+            int "LCD horizontal resolution"
+            default 800
+
+        config LCD_V_RES
+            int "LCD vertical resolution"
+            default 480
+
+        config LCD_PIXEL_CLOCK_HZ
+            int "LCD pixel clock in Hz"
+            default 18000000
+
+        config LCD_HSYNC
+            int "HSYNC pulse width"
+            default 1
+
+        config LCD_HBP
+            int "Horizontal back porch"
+            default 40
+
+        config LCD_HFP
+            int "Horizontal front porch"
+            default 20
+
+        config LCD_VSYNC
+            int "VSYNC pulse width"
+            default 1
+
+        config LCD_VBP
+            int "Vertical back porch"
+            default 10
+
+        config LCD_VFP
+            int "Vertical front porch"
+            default 5
+
+        config LCD_PCLK_ACTIVE_NEG
+            bool "Clock LCD data on falling PCLK edge"
+            default y
+
+        config LCD_DATA_WIDTH
+            int "RGB data width"
+            default 16
+            range 16 16
+
+        config LCD_PCLK_GPIO
+            int "PCLK GPIO"
+            default 40
+
+        config LCD_DE_GPIO
+            int "DE GPIO"
+            default 43
+
+        config LCD_HSYNC_GPIO
+            int "HSYNC GPIO"
+            default 44
+
+        config LCD_VSYNC_GPIO
+            int "VSYNC GPIO"
+            default 45
+
+        config LCD_DATA0_GPIO
+            int "DATA0 GPIO"
+            default 8
+        config LCD_DATA1_GPIO
+            int "DATA1 GPIO"
+            default 9
+        config LCD_DATA2_GPIO
+            int "DATA2 GPIO"
+            default 10
+        config LCD_DATA3_GPIO
+            int "DATA3 GPIO"
+            default 11
+        config LCD_DATA4_GPIO
+            int "DATA4 GPIO"
+            default 12
+        config LCD_DATA5_GPIO
+            int "DATA5 GPIO"
+            default 13
+        config LCD_DATA6_GPIO
+            int "DATA6 GPIO"
+            default 14
+        config LCD_DATA7_GPIO
+            int "DATA7 GPIO"
+            default 15
+        config LCD_DATA8_GPIO
+            int "DATA8 GPIO"
+            default 16
+        config LCD_DATA9_GPIO
+            int "DATA9 GPIO"
+            default 17
+        config LCD_DATA10_GPIO
+            int "DATA10 GPIO"
+            default 18
+        config LCD_DATA11_GPIO
+            int "DATA11 GPIO"
+            default 19
+        config LCD_DATA12_GPIO
+            int "DATA12 GPIO"
+            default 33
+        config LCD_DATA13_GPIO
+            int "DATA13 GPIO"
+            default 34
+        config LCD_DATA14_GPIO
+            int "DATA14 GPIO"
+            default 35
+        config LCD_DATA15_GPIO
+            int "DATA15 GPIO"
+            default 36
+    endmenu
+
+endmenu
