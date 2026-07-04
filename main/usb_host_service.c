@@ -8,6 +8,9 @@
 #include "usb/usb_host.h"
 
 static const char *TAG = "usb_host";
+#define USB_ROOT_PRE_POWER_OFF_MS  150
+#define USB_ROOT_POWER_SETTLE_MS   900
+
 static TaskHandle_t s_host_task;
 static bool s_started;
 static bool s_root_powered;
@@ -105,11 +108,15 @@ esp_err_t usb_host_service_power_on(void)
         return ESP_OK;
     }
 
+    ESP_LOGI(TAG, "Cycling USB root port power");
+    (void)usb_host_lib_set_root_port_power(false);
+    vTaskDelay(pdMS_TO_TICKS(USB_ROOT_PRE_POWER_OFF_MS));
+
     ESP_LOGI(TAG, "Powering USB root port");
     esp_err_t ret = usb_host_lib_set_root_port_power(true);
     if (ret == ESP_OK) {
         s_root_powered = true;
-        vTaskDelay(pdMS_TO_TICKS(250));
+        vTaskDelay(pdMS_TO_TICKS(USB_ROOT_POWER_SETTLE_MS));
     }
     return ret;
 }

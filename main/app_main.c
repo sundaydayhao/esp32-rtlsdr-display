@@ -37,6 +37,8 @@ static const char *TAG = "app";
 #define CONFIG_FM_RECEIVER_I2S_DOUT_GPIO -1
 #endif
 
+#define STARTUP_TEST_WATERFALL_DELAY_MS  6000
+
 typedef struct {
     waterfall_display_t *display;
     dsp_waterfall_t *dsp;
@@ -98,6 +100,7 @@ static void dsp_task(void *arg)
 {
     app_ctx_t *app = (app_ctx_t *)arg;
     TickType_t last_test = xTaskGetTickCount();
+    TickType_t test_start = last_test + pdMS_TO_TICKS(STARTUP_TEST_WATERFALL_DELAY_MS);
 
     while (true) {
         size_t item_size = 0;
@@ -113,9 +116,10 @@ static void dsp_task(void *arg)
             continue;
         }
 
-        if (!app->have_samples && xTaskGetTickCount() - last_test > pdMS_TO_TICKS(60)) {
+        TickType_t now = xTaskGetTickCount();
+        if (!app->have_samples && now >= test_start && now - last_test > pdMS_TO_TICKS(60)) {
             dsp_waterfall_generate_test_line(app->dsp);
-            last_test = xTaskGetTickCount();
+            last_test = now;
         }
     }
 }
@@ -185,9 +189,6 @@ void app_main(void)
                                     RINGBUF_TYPE_BYTEBUF);
     ESP_ERROR_CHECK(app.iq_ring ? ESP_OK : ESP_ERR_NO_MEM);
 
-    BaseType_t ok = xTaskCreatePinnedToCore(dsp_task, "fft_waterfall", 8192, &app, 4, NULL, 1);
-    ESP_ERROR_CHECK(ok == pdTRUE ? ESP_OK : ESP_ERR_NO_MEM);
-
     esp_err_t ret = usb_host_service_start();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "USB host failed: %s", esp_err_to_name(ret));
@@ -209,6 +210,9 @@ void app_main(void)
     } else if (app.requested_center_hz != radio_cfg.center_freq_hz) {
         (void)rtlsdr_set_center_freq_hz(app.radio, app.requested_center_hz);
     }
+
+    BaseType_t ok = xTaskCreatePinnedToCore(dsp_task, "fft_waterfall", 8192, &app, 4, NULL, 1);
+    ESP_ERROR_CHECK(ok == pdTRUE ? ESP_OK : ESP_ERR_NO_MEM);
 
     while (true) {
         fm_receiver_status_t fm_status = {0};
