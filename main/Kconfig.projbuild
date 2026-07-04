@@ -185,4 +185,89 @@ menu "RTL-SDR Waterfall"
             default 36
     endmenu
 
+    menu "LVGL"
+        config LVGL_DRAW_BUF_LINES
+            int "LVGL draw buffer lines"
+            default 40
+            range 8 120
+            help
+                Number of LCD lines in the partial LVGL draw buffer.
+
+        config LVGL_TASK_STACK_SIZE
+            int "LVGL task stack size"
+            default 8192
+            range 4096 16384
+
+        config LVGL_TASK_PRIORITY
+            int "LVGL task priority"
+            default 2
+            range 1 10
+    endmenu
+
+    menu "Touch"
+        config TOUCH_ENABLED
+            bool "Enable I2C touch input"
+            default y
+            help
+                Enables LVGL pointer input from an I2C capacitive touch controller.
+                GT911 and FT5x06-compatible controllers are probed at boot.
+
+        config TOUCH_I2C_PORT
+            int "Touch I2C port"
+            depends on TOUCH_ENABLED
+            default 0
+            range 0 1
+
+        config TOUCH_I2C_SDA_GPIO
+            int "Touch I2C SDA GPIO"
+            depends on TOUCH_ENABLED
+            default 4
+
+        config TOUCH_I2C_SCL_GPIO
+            int "Touch I2C SCL GPIO"
+            depends on TOUCH_ENABLED
+            default 5
+
+        config TOUCH_I2C_FREQ_HZ
+            int "Touch I2C clock frequency"
+            depends on TOUCH_ENABLED
+            default 400000
+            range 100000 400000
+
+        config TOUCH_GT911_ADDR
+            hex "GT911 I2C address"
+            depends on TOUCH_ENABLED
+            default 0x5d
+
+        config TOUCH_FT5X06_ADDR
+            hex "FT5x06 I2C address"
+            depends on TOUCH_ENABLED
+            default 0x38
+
+        config TOUCH_INT_GPIO
+            int "Touch INT GPIO (-1 if unused)"
+            depends on TOUCH_ENABLED
+            default -1
+
+        config TOUCH_RST_GPIO
+            int "Touch RST GPIO (-1 if unused)"
+            depends on TOUCH_ENABLED
+            default -1
+
+        config TOUCH_SWAP_XY
+            bool "Swap touch X/Y"
+            depends on TOUCH_ENABLED
+            default n
+
+        config TOUCH_MIRROR_X
+            bool "Mirror touch X"
+            depends on TOUCH_ENABLED
+            default n
+
+        config TOUCH_MIRROR_Y
+            bool "Mirror touch Y"
+            depends on TOUCH_ENABLED
+            default n
+    endmenu
+
 endmenu

@@ -20,9 +20,17 @@ dependencies:
     source:
       type: idf
     version: 6.2.0
+  lvgl/lvgl:
+    component_hash: 184e532558c1c45fefed631f3e235423d22582aafb4630f3e8885c35281a49ae
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 9.5.0
 direct_dependencies:
 - espressif/usb
 - idf
-manifest_hash: 88be71b90372fd4549b38b25e7932a98f6e4611f92e1cbd9277c8fe54d2e920b
+- lvgl/lvgl
+manifest_hash: 1b018bb3a07ebaf24f1d285e819df372be35f003f7d86fbe24b998944c82e71e
 target: esp32s31
 version: 3.0.0

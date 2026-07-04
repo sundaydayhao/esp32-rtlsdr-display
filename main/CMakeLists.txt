@@ -9,7 +9,9 @@ idf_component_register(
     REQUIRES
         esp_lcd
         esp_driver_gpio
+        esp_driver_i2c
         esp_ringbuf
         esp_timer
+        lvgl
         usb
 )

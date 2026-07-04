@@ -21,6 +21,8 @@ Important menuconfig entries are under `RTL-SDR Waterfall`:
 - Displayed center frequency and RTL2832U sample rate.
 - FFT size and waterfall dimensions.
 - LCD RGB timing and GPIO mapping.
+- LVGL draw buffer/task sizing.
+- I2C touch input. The firmware probes GT911 and FT5x06-compatible controllers; set SDA/SCL/INT/RST and axis transform options to match the LCD subboard.
 - Optional RTL2832U baseband initialization.
 
 The first hardware bring-up should use the default low sample rate. Raise it only after the device enumerates, bulk reads are continuous, and the LCD refresh is stable.
@@ -29,7 +31,9 @@ The first hardware bring-up should use the default low sample rate. Raise it onl
 
 This project currently validates the ESP-IDF path end to end: USB Host enumeration, RTL2832U bulk IN transfers, IQ buffering, FFT processing, and RGB LCD waterfall drawing. If no RTL-SDR stream is available, it draws a synthetic waterfall so the LCD path can be tested independently.
 
-The display layout follows the ESP32-DIV spectrum screens: a live FFT overview is drawn above the scrolling waterfall, the horizontal ruler labels the left edge, center, and right edge of the sampled span, and signal strength uses a blue/purple to yellow/white RGB565 palette. Narrow peaks are preserved when the FFT bins are scaled to the LCD width by taking the peak value in each output pixel column.
+The display is now LVGL-based and mirrors the touch navigation from the Linux/Qt `rtlsdr-display` project. The home screen exposes ADS-B, FM, Waterfall, Sensors, IQ Record, and Scanner tiles. The Waterfall page is wired to the existing live FFT pipeline and supports touch selection of a marker frequency. The other feature pages are present as LVGL navigation targets and status/configuration placeholders until their ESP32-side decoder, audio, tuner-control, storage, or scanner logic is implemented.
+
+The waterfall layout follows the ESP32-DIV spectrum screens: a live FFT overview is drawn above the scrolling waterfall, the horizontal ruler marks the left edge, center, and right edge of the sampled span, and signal strength uses a blue/purple to yellow/white RGB565 palette. Narrow peaks are preserved when the FFT bins are scaled to the LCD width by taking the peak value in each output pixel column.
 
 The external tuner PLL/gain programming for common R820T/R828D RTL-SDR dongles is intentionally isolated in `main/rtlsdr.c` and is the next hardware-specific step. Until that is filled in, the center-frequency setting is shown on screen but does not tune the RF front end.
 
