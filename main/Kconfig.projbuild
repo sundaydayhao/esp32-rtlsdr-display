@@ -221,12 +221,12 @@ menu "RTL-SDR Waterfall"
         config TOUCH_I2C_SDA_GPIO
             int "Touch I2C SDA GPIO"
             depends on TOUCH_ENABLED
-            default 4
+            default 0
 
         config TOUCH_I2C_SCL_GPIO
             int "Touch I2C SCL GPIO"
             depends on TOUCH_ENABLED
-            default 5
+            default 1
 
         config TOUCH_I2C_FREQ_HZ
             int "Touch I2C clock frequency"
@@ -237,7 +237,7 @@ menu "RTL-SDR Waterfall"
         config TOUCH_GT911_ADDR
             hex "GT911 I2C address"
             depends on TOUCH_ENABLED
-            default 0x5d
+            default 0x14
 
         config TOUCH_FT5X06_ADDR
             hex "FT5x06 I2C address"

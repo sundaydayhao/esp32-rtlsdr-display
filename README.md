@@ -22,7 +22,7 @@ Important menuconfig entries are under `RTL-SDR Waterfall`:
 - FFT size and waterfall dimensions.
 - LCD RGB timing and GPIO mapping.
 - LVGL draw buffer/task sizing.
-- I2C touch input. The firmware probes GT911 and FT5x06-compatible controllers; set SDA/SCL/INT/RST and axis transform options to match the LCD subboard.
+- I2C touch input. The default ESP32-S31-Korvo-1 LCD subboard setting uses SDA GPIO0, SCL GPIO1, and GT911 address 0x14. The firmware also probes FT5x06-compatible controllers; set SDA/SCL/INT/RST and axis transform options to match other LCD subboards.
 - Optional RTL2832U baseband initialization.
 
 The first hardware bring-up should use the default low sample rate. Raise it only after the device enumerates, bulk reads are continuous, and the LCD refresh is stable.

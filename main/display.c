@@ -105,6 +105,8 @@ struct waterfall_display {
     i2c_master_dev_handle_t touch_dev;
     lv_indev_t *touch_indev;
     touch_chip_t touch_chip;
+    bool touch_last_pressed;
+    uint32_t touch_status_log_count;
 #endif
 };
 
@@ -551,12 +553,14 @@ static void tile_event_cb(lv_event_t *event)
 {
     waterfall_display_t *display = lv_event_get_user_data(event);
     app_page_t page = (app_page_t)(uintptr_t)lv_obj_get_user_data(lv_event_get_target(event));
+    ESP_LOGI(TAG, "Tile clicked: %s", feature_for_page(page)->title);
     switch_page_locked(display, page);
 }
 
 static void back_event_cb(lv_event_t *event)
 {
     waterfall_display_t *display = lv_event_get_user_data(event);
+    ESP_LOGI(TAG, "Back to home");
     switch_page_locked(display, PAGE_HOME);
 }
 
@@ -586,6 +590,7 @@ static void waterfall_event_cb(lv_event_t *event)
 
     int64_t left = (int64_t)display->center_hz - (int64_t)display->sample_rate_hz / 2;
     uint32_t marker = (uint32_t)(left + ((int64_t)display->sample_rate_hz * rel_x) / w);
+    ESP_LOGI(TAG, "Waterfall marker touch x=%d -> %lu Hz", rel_x, (unsigned long)marker);
     display->marker_hz = marker;
     display->marker_valid = true;
     display->status_dirty = true;
@@ -931,22 +936,55 @@ static esp_err_t touch_read_reg8(waterfall_display_t *display, uint8_t reg, uint
     return i2c_master_transmit_receive(display->touch_dev, &reg, 1, data, len, TOUCH_TIMEOUT_MS);
 }
 
+static void scan_touch_i2c_bus(waterfall_display_t *display)
+{
+    char found[96] = {0};
+    size_t used = 0;
+
+    for (uint8_t addr = 0x08; addr < 0x78; addr++) {
+        if (i2c_master_probe(display->touch_bus, addr, TOUCH_TIMEOUT_MS) == ESP_OK) {
+            int written = snprintf(found + used, sizeof(found) - used, "%s0x%02x", used ? " " : "", addr);
+            if (written > 0) {
+                used += MIN((size_t)written, sizeof(found) - used - 1);
+            }
+        }
+    }
+
+    ESP_LOGI(TAG, "Touch I2C scan: %s", used ? found : "no devices");
+}
+
 static bool gt911_get_point(waterfall_display_t *display, uint16_t *x, uint16_t *y)
 {
     uint8_t status = 0;
     if (touch_read_reg16(display, GT911_STATUS_REG, &status, 1) != ESP_OK) {
         return false;
     }
-    if ((status & GT911_STATUS_READY) == 0 || (status & GT911_STATUS_TOUCH_MASK) == 0) {
+    if (display->touch_status_log_count < 8 || (status & GT911_STATUS_READY)) {
+        ESP_LOGI(TAG, "GT touch status=0x%02x", status);
+        display->touch_status_log_count++;
+    }
+    if ((status & GT911_STATUS_READY) == 0) {
+        return false;
+    }
+    if ((status & GT911_STATUS_TOUCH_MASK) == 0) {
+        (void)touch_write_reg16_u8(display, GT911_STATUS_REG, 0);
         return false;
     }
 
     uint8_t point[8] = {0};
     bool pressed = false;
     if (touch_read_reg16(display, GT911_POINT1_REG, point, sizeof(point)) == ESP_OK) {
-        *x = (uint16_t)(point[1] << 8 | point[0]);
-        *y = (uint16_t)(point[3] << 8 | point[2]);
+        uint16_t raw_x = (uint16_t)(point[1] << 8 | point[0]);
+        uint16_t raw_y = (uint16_t)(point[3] << 8 | point[2]);
+        *x = raw_x;
+        *y = raw_y;
         touch_apply_transform(display, x, y);
+        ESP_LOGI(TAG, "GT raw touch status=0x%02x raw=%u,%u mapped=%u,%u",
+                 status,
+                 (unsigned)raw_x,
+                 (unsigned)raw_y,
+                 (unsigned)*x,
+                 (unsigned)*y);
         pressed = true;
     }
     (void)touch_write_reg16_u8(display, GT911_STATUS_REG, 0);
@@ -991,13 +1029,32 @@ static void lvgl_touch_cb(lv_indev_t *indev, lv_indev_data_t *data)
         data->point.x = x;
         data->point.y = y;
         data->state = LV_INDEV_STATE_PRESSED;
+        if (!display->touch_last_pressed) {
+            ESP_LOGI(TAG, "Touch press %u,%u", (unsigned)x, (unsigned)y);
+        }
+        display->touch_last_pressed = true;
     } else {
         data->state = LV_INDEV_STATE_RELEASED;
+        if (display->touch_last_pressed) {
+            ESP_LOGI(TAG, "Touch release");
+        }
+        display->touch_last_pressed = false;
     }
 }
 
 static esp_err_t setup_touch(waterfall_display_t *display)
 {
+    ESP_LOGI(TAG,
+             "Touch init: port=%d sda=%d scl=%d freq=%d gt911=0x%02x ft5x06=0x%02x int=%d rst=%d",
+             CONFIG_TOUCH_I2C_PORT,
+             CONFIG_TOUCH_I2C_SDA_GPIO,
+             CONFIG_TOUCH_I2C_SCL_GPIO,
+             CONFIG_TOUCH_I2C_FREQ_HZ,
+             CONFIG_TOUCH_GT911_ADDR,
+             CONFIG_TOUCH_FT5X06_ADDR,
+             CONFIG_TOUCH_INT_GPIO,
+             CONFIG_TOUCH_RST_GPIO);
+
     if (CONFIG_TOUCH_RST_GPIO >= 0) {
         gpio_config_t rst_cfg = {
             .pin_bit_mask = gpio_bit_mask(CONFIG_TOUCH_RST_GPIO),
@@ -1029,8 +1086,10 @@ static esp_err_t setup_touch(waterfall_display_t *display)
         },
     };
     ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_config, &display->touch_bus), TAG, "touch i2c bus");
+    scan_touch_i2c_bus(display);
 
     if (i2c_master_probe(display->touch_bus, CONFIG_TOUCH_GT911_ADDR, TOUCH_TIMEOUT_MS) == ESP_OK) {
+        ESP_LOGI(TAG, "Touch probe matched GT911 address 0x%02x", CONFIG_TOUCH_GT911_ADDR);
         i2c_device_config_t dev_config = {
             .dev_addr_length = I2C_ADDR_BIT_LEN_7,
             .device_address = CONFIG_TOUCH_GT911_ADDR,
@@ -1044,12 +1103,14 @@ static esp_err_t setup_touch(waterfall_display_t *display)
             snprintf(display->touch_status, sizeof(display->touch_status), "GT911 %c%c%c%c",
                      product[0], product[1], product[2], product[3]);
         } else {
+            ESP_LOGW(TAG, "GT911 address responded but product ID read failed");
             i2c_master_bus_rm_device(display->touch_dev);
             display->touch_dev = NULL;
         }
     }
 
     if (!display->touch_dev && i2c_master_probe(display->touch_bus, CONFIG_TOUCH_FT5X06_ADDR, TOUCH_TIMEOUT_MS) == ESP_OK) {
+        ESP_LOGI(TAG, "Touch probe matched FT5x06 address 0x%02x", CONFIG_TOUCH_FT5X06_ADDR);
         i2c_device_config_t dev_config = {
             .dev_addr_length = I2C_ADDR_BIT_LEN_7,
             .device_address = CONFIG_TOUCH_FT5X06_ADDR,
