@@ -31,6 +31,7 @@
 
 #define SYS_DEMOD_CTL             0x3000
 #define SYS_GPO                   0x3001
+#define SYS_GPD                   0x3004
 #define SYS_GPOE                  0x3003
 #define SYS_DEMOD_CTL_1           0x300b
 #define SYS_IR_SUSPEND            0x300c
@@ -43,6 +44,14 @@
 #define FIR_LEN                   16
 
 #define RTL_XTAL_HZ               28800000U
+#define FC0013_I2C_ADDR           0xc6
+#define FC0012_CHECK_VAL          0xa1
+#define FC0013_CHECK_ADDR         0x00
+#define FC0013_CHECK_VAL          0xa3
+#define FC0013_BANDWIDTH_HZ       6000000U
+#define FC0012_MAX_FREQ_HZ        950000000U
+#define FC0013_MIN_FREQ_HZ        22000000U
+#define FC0013_MAX_FREQ_HZ        1100000000U
 #define R82XX_I2C_ADDR_R820T      0x34
 #define R82XX_I2C_ADDR_R828D      0x74
 #define R82XX_CHECK_ADDR          0x00
@@ -59,6 +68,13 @@ typedef enum {
     R82XX_CHIP_R820T,
     R82XX_CHIP_R828D,
 } r82xx_chip_t;
+
+typedef enum {
+    RTL_TUNER_NONE = 0,
+    RTL_TUNER_FC0012,
+    RTL_TUNER_FC0013,
+    RTL_TUNER_R82XX,
+} rtl_tuner_type_t;
 
 typedef enum {
     R82XX_XTAL_LOW_CAP_30P = 0,
@@ -138,6 +154,7 @@ struct rtlsdr {
     uint8_t alt_setting;
     uint8_t bulk_in_ep;
     uint16_t bulk_mps;
+    rtl_tuner_type_t tuner_type;
     r82xx_chip_t tuner_chip;
     uint8_t tuner_i2c_addr;
     uint8_t r82xx_regs[R82XX_NUM_REGS];
@@ -147,10 +164,13 @@ struct rtlsdr {
     uint8_t r82xx_input;
     bool r82xx_has_lock;
     bool r82xx_init_done;
+    bool fitipower_init_done;
     usb_transfer_t *transfers[CONFIG_RTLSDR_NUM_TRANSFERS];
 };
 
 static const char *TAG = "rtlsdr";
+
+static esp_err_t rtlsdr_configure_r82xx_if(rtlsdr_t *dev);
 
 static bool is_rtlsdr_vid_pid(uint16_t vid, uint16_t pid)
 {
@@ -275,6 +295,15 @@ static esp_err_t rtlsdr_write_reg(rtlsdr_t *dev, uint8_t block, uint16_t addr, u
     return rtlsdr_write_array(dev, block, addr, data, len);
 }
 
+static esp_err_t rtlsdr_read_reg(rtlsdr_t *dev, uint8_t block, uint16_t addr, uint8_t len, uint16_t *out)
+{
+    uint8_t data[2] = {0};
+    ESP_RETURN_ON_FALSE(out && len > 0 && len <= sizeof(data), ESP_ERR_INVALID_ARG, TAG, "bad reg read");
+    ESP_RETURN_ON_ERROR(rtlsdr_read_array(dev, block, addr, data, len), TAG, "reg read");
+    *out = (uint16_t)((data[1] << 8) | data[0]);
+    return ESP_OK;
+}
+
 static esp_err_t rtlsdr_demod_read_reg(rtlsdr_t *dev, uint8_t page, uint16_t addr, uint8_t len, uint16_t *out)
 {
     uint8_t data[2] = {0};
@@ -319,6 +348,25 @@ static esp_err_t rtlsdr_i2c_read_reg(rtlsdr_t *dev, uint8_t i2c_addr, uint8_t re
 static esp_err_t rtlsdr_set_i2c_repeater(rtlsdr_t *dev, bool on)
 {
     return rtlsdr_demod_write_reg(dev, 1, 0x01, on ? 0x18 : 0x10, 1);
+}
+
+static esp_err_t rtlsdr_set_gpio_bit(rtlsdr_t *dev, uint8_t gpio, bool on)
+{
+    uint16_t value = 0;
+    uint16_t mask = (uint16_t)(1U << gpio);
+    ESP_RETURN_ON_ERROR(rtlsdr_read_reg(dev, RTL_BLOCK_SYS, SYS_GPO, 1, &value), TAG, "gpio read");
+    value = on ? (value | mask) : (value & (uint16_t)~mask);
+    return rtlsdr_write_reg(dev, RTL_BLOCK_SYS, SYS_GPO, value, 1);
+}
+
+static esp_err_t rtlsdr_set_gpio_output(rtlsdr_t *dev, uint8_t gpio)
+{
+    uint16_t value = 0;
+    uint16_t mask = (uint16_t)(1U << gpio);
+    ESP_RETURN_ON_ERROR(rtlsdr_read_reg(dev, RTL_BLOCK_SYS, SYS_GPD, 1, &value), TAG, "gpio dir read");
+    ESP_RETURN_ON_ERROR(rtlsdr_write_reg(dev, RTL_BLOCK_SYS, SYS_GPD, value & (uint16_t)~mask, 1), TAG, "gpio dir");
+    ESP_RETURN_ON_ERROR(rtlsdr_read_reg(dev, RTL_BLOCK_SYS, SYS_GPOE, 1, &value), TAG, "gpio enable read");
+    return rtlsdr_write_reg(dev, RTL_BLOCK_SYS, SYS_GPOE, value | mask, 1);
 }
 
 static esp_err_t rtlsdr_set_if_freq(rtlsdr_t *dev, uint32_t freq_hz)
@@ -428,6 +476,383 @@ static esp_err_t r82xx_read(rtlsdr_t *dev, uint8_t reg, uint8_t *val, uint8_t le
         val[i] = r82xx_bitrev(data[i]);
     }
     return ESP_OK;
+}
+
+static esp_err_t fitipower_write_reg(rtlsdr_t *dev, uint8_t reg, uint8_t val)
+{
+    uint8_t data[2] = {reg, val};
+    return rtlsdr_i2c_write(dev, FC0013_I2C_ADDR, data, sizeof(data));
+}
+
+static esp_err_t fitipower_read_reg(rtlsdr_t *dev, uint8_t reg, uint8_t *val)
+{
+    ESP_RETURN_ON_ERROR(rtlsdr_i2c_write(dev, FC0013_I2C_ADDR, &reg, 1), TAG, "fitipower read addr");
+    return rtlsdr_i2c_read(dev, FC0013_I2C_ADDR, val, 1);
+}
+
+static esp_err_t fitipower_probe_tuner(rtlsdr_t *dev)
+{
+    uint8_t reg = 0;
+
+    ESP_RETURN_ON_ERROR(rtlsdr_set_i2c_repeater(dev, true), TAG, "i2c repeater on");
+    esp_err_t ret = fitipower_read_reg(dev, FC0013_CHECK_ADDR, &reg);
+    (void)rtlsdr_set_i2c_repeater(dev, false);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Fitipower probe addr 0x%02x failed: %s", FC0013_I2C_ADDR, esp_err_to_name(ret));
+        return ret;
+    }
+    if (reg == FC0012_CHECK_VAL) {
+        dev->tuner_type = RTL_TUNER_FC0012;
+        dev->tuner_i2c_addr = FC0013_I2C_ADDR;
+        ESP_LOGI(TAG, "Found Fitipower FC0012 tuner at 0x%02x", FC0013_I2C_ADDR);
+        return ESP_OK;
+    }
+    if (reg == FC0013_CHECK_VAL) {
+        dev->tuner_type = RTL_TUNER_FC0013;
+        dev->tuner_i2c_addr = FC0013_I2C_ADDR;
+        ESP_LOGI(TAG, "Found Fitipower FC0013 tuner at 0x%02x", FC0013_I2C_ADDR);
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "Fitipower probe addr 0x%02x read 0x%02x", FC0013_I2C_ADDR, reg);
+    return ESP_ERR_NOT_FOUND;
+}
+
+static esp_err_t fc0013_init_tuner(rtlsdr_t *dev)
+{
+    static const uint8_t init_regs[] = {
+        0x00,
+        0x09,
+        0x16,
+        0x00,
+        0x00,
+        0x17,
+        0x02,
+        0x2a,
+        0xff,
+        0x6e,
+        0xb8,
+        0x82,
+        0xfe,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x50,
+        0x01,
+    };
+
+    ESP_RETURN_ON_ERROR(rtlsdr_set_i2c_repeater(dev, true), TAG, "i2c repeater on");
+    esp_err_t ret = ESP_OK;
+    for (uint8_t reg = 1; reg < sizeof(init_regs); reg++) {
+        ret = fitipower_write_reg(dev, reg, init_regs[reg]);
+        if (ret != ESP_OK) {
+            break;
+        }
+    }
+    if (ret == ESP_OK) {
+        ret = fitipower_write_reg(dev, 0x13, 0x0a);
+    }
+    (void)rtlsdr_set_i2c_repeater(dev, false);
+
+    if (ret == ESP_OK) {
+        dev->fitipower_init_done = true;
+    }
+    return ret;
+}
+
+static esp_err_t fc0012_init_tuner(rtlsdr_t *dev)
+{
+    static const uint8_t init_regs[] = {
+        0x00,
+        0x05,
+        0x10,
+        0x00,
+        0x00,
+        0x0f,
+        0x00,
+        0x20,
+        0xff,
+        0x6e,
+        0xb8,
+        0x82,
+        0xfe,
+        0x02,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x1f,
+        0x00,
+        0x00,
+        0x04,
+    };
+
+    ESP_RETURN_ON_ERROR(rtlsdr_set_gpio_output(dev, 6), TAG, "FC0012 GPIO6 output");
+    ESP_RETURN_ON_ERROR(rtlsdr_set_i2c_repeater(dev, true), TAG, "i2c repeater on");
+    esp_err_t ret = ESP_OK;
+    for (uint8_t reg = 1; reg < sizeof(init_regs); reg++) {
+        ret = fitipower_write_reg(dev, reg, init_regs[reg]);
+        if (ret != ESP_OK) {
+            break;
+        }
+    }
+    (void)rtlsdr_set_i2c_repeater(dev, false);
+
+    if (ret == ESP_OK) {
+        dev->fitipower_init_done = true;
+    }
+    return ret;
+}
+
+static esp_err_t fc0013_set_vhf_track(rtlsdr_t *dev, uint32_t freq_hz)
+{
+    uint8_t tmp = 0;
+    uint8_t track = 0x1c;
+
+    ESP_RETURN_ON_ERROR(fitipower_read_reg(dev, 0x1d, &tmp), TAG, "fc0013 read track");
+    tmp &= 0xe3;
+    if (freq_hz <= 177500000U) {
+        track = 0x1c;
+    } else if (freq_hz <= 184500000U) {
+        track = 0x18;
+    } else if (freq_hz <= 191500000U) {
+        track = 0x14;
+    } else if (freq_hz <= 198500000U) {
+        track = 0x10;
+    } else if (freq_hz <= 205500000U) {
+        track = 0x0c;
+    } else if (freq_hz <= 219500000U) {
+        track = 0x08;
+    } else if (freq_hz < 300000000U) {
+        track = 0x04;
+    }
+    return fitipower_write_reg(dev, 0x1d, (uint8_t)(tmp | track));
+}
+
+static esp_err_t fc0013_set_filter(rtlsdr_t *dev, uint32_t freq_hz)
+{
+    uint8_t tmp = 0;
+
+    ESP_RETURN_ON_ERROR(fc0013_set_vhf_track(dev, freq_hz), TAG, "fc0013 VHF track");
+
+    ESP_RETURN_ON_ERROR(fitipower_read_reg(dev, 0x07, &tmp), TAG, "fc0013 read VHF filter");
+    ESP_RETURN_ON_ERROR(fitipower_write_reg(dev, 0x07, freq_hz < 300000000U ? (tmp | 0x10) : (tmp & 0xef)),
+                        TAG, "fc0013 VHF filter");
+
+    ESP_RETURN_ON_ERROR(fitipower_read_reg(dev, 0x14, &tmp), TAG, "fc0013 read band");
+    if (freq_hz < 300000000U) {
+        return fitipower_write_reg(dev, 0x14, (uint8_t)(tmp & 0x1f));
+    }
+    return fitipower_write_reg(dev, 0x14, (uint8_t)((tmp & 0x1f) | 0x40));
+}
+
+static esp_err_t fitipower_set_params(rtlsdr_t *dev, uint32_t freq_hz, uint32_t bandwidth_hz)
+{
+    uint8_t reg[7] = {0};
+    uint8_t am;
+    uint8_t pm;
+    uint8_t multi;
+    uint8_t tmp = 0;
+    uint64_t f_vco;
+    uint32_t xtal_freq_div_2 = RTL_XTAL_HZ / 2U;
+    uint16_t xin;
+    uint16_t xdiv;
+    bool vco_select = false;
+
+    uint32_t max_freq_hz = dev->tuner_type == RTL_TUNER_FC0012 ? FC0012_MAX_FREQ_HZ : FC0013_MAX_FREQ_HZ;
+    ESP_RETURN_ON_FALSE(freq_hz >= FC0013_MIN_FREQ_HZ && freq_hz <= max_freq_hz,
+                        ESP_ERR_INVALID_ARG,
+                        TAG,
+                        "Fitipower frequency out of range: %lu Hz",
+                        (unsigned long)freq_hz);
+    if (dev->tuner_type == RTL_TUNER_FC0012) {
+        ESP_RETURN_ON_ERROR(rtlsdr_set_gpio_bit(dev, 6, freq_hz > 300000000U), TAG, "FC0012 V/U filter");
+    } else if (dev->tuner_type == RTL_TUNER_FC0013) {
+        ESP_RETURN_ON_ERROR(fc0013_set_filter(dev, freq_hz), TAG, "fc0013 filter");
+    }
+
+    if (freq_hz < 37084000U) {
+        multi = 96;
+        reg[5] = 0x82;
+        reg[6] = 0x00;
+    } else if (freq_hz < 55625000U) {
+        multi = 64;
+        reg[5] = dev->tuner_type == RTL_TUNER_FC0012 ? 0x82 : 0x02;
+        reg[6] = 0x02;
+    } else if (freq_hz < 74167000U) {
+        multi = 48;
+        reg[5] = 0x42;
+        reg[6] = 0x00;
+    } else if (freq_hz < 111250000U) {
+        multi = 32;
+        reg[5] = dev->tuner_type == RTL_TUNER_FC0012 ? 0x42 : 0x82;
+        reg[6] = 0x02;
+    } else if (freq_hz < 148334000U) {
+        multi = 24;
+        reg[5] = 0x22;
+        reg[6] = 0x00;
+    } else if (freq_hz < 222500000U) {
+        multi = 16;
+        reg[5] = dev->tuner_type == RTL_TUNER_FC0012 ? 0x22 : 0x42;
+        reg[6] = 0x02;
+    } else if (freq_hz < 296667000U) {
+        multi = 12;
+        reg[5] = 0x12;
+        reg[6] = 0x00;
+    } else if (freq_hz < 445000000U) {
+        multi = 8;
+        reg[5] = dev->tuner_type == RTL_TUNER_FC0012 ? 0x12 : 0x22;
+        reg[6] = 0x02;
+    } else if (freq_hz < 593334000U) {
+        multi = 6;
+        reg[5] = 0x0a;
+        reg[6] = 0x00;
+    } else if (dev->tuner_type == RTL_TUNER_FC0013 && freq_hz < 950000000U) {
+        multi = 4;
+        reg[5] = 0x12;
+        reg[6] = 0x02;
+    } else {
+        multi = 4;
+        reg[5] = 0x0a;
+        reg[6] = 0x02;
+    }
+
+    f_vco = (uint64_t)freq_hz * multi;
+    if (f_vco >= 3060000000ULL) {
+        reg[6] |= 0x08;
+        vco_select = true;
+    }
+
+    xdiv = (uint16_t)(f_vco / xtal_freq_div_2);
+    if (f_vco - (uint64_t)xdiv * xtal_freq_div_2 >= xtal_freq_div_2 / 2U) {
+        xdiv++;
+    }
+
+    pm = (uint8_t)(xdiv / 8U);
+    am = (uint8_t)(xdiv - 8U * pm);
+    if (am < 2) {
+        am += 8;
+        pm--;
+    }
+    if (pm > 31) {
+        reg[1] = (uint8_t)(am + 8U * (pm - 31U));
+        reg[2] = 31;
+    } else {
+        reg[1] = am;
+        reg[2] = pm;
+    }
+    ESP_RETURN_ON_FALSE(reg[1] <= 15 && reg[2] >= 0x0b,
+                        ESP_ERR_INVALID_ARG,
+                        TAG,
+                        "no Fitipower PLL combination for %lu Hz",
+                        (unsigned long)freq_hz);
+
+    reg[6] |= 0x20;
+    xin = (uint16_t)((f_vco - (f_vco / xtal_freq_div_2) * xtal_freq_div_2) / 1000ULL);
+    xin = (uint16_t)(((uint32_t)xin << 15) / (xtal_freq_div_2 / 1000U));
+    if (xin >= 16384) {
+        xin = (uint16_t)(xin + 32768U);
+    }
+    reg[3] = (uint8_t)(xin >> 8);
+    reg[4] = (uint8_t)(xin & 0xff);
+
+    reg[6] &= 0x3f;
+    if (bandwidth_hz == 6000000U) {
+        reg[6] |= 0x80;
+    } else if (bandwidth_hz == 7000000U) {
+        reg[6] |= 0x40;
+    }
+    reg[5] |= 0x07;
+
+    for (uint8_t i = 1; i <= 6; i++) {
+        ESP_RETURN_ON_ERROR(fitipower_write_reg(dev, i, reg[i]), TAG, "fitipower pll write");
+    }
+
+    if (dev->tuner_type == RTL_TUNER_FC0013) {
+        ESP_RETURN_ON_ERROR(fitipower_read_reg(dev, 0x11, &tmp), TAG, "fc0013 read multi");
+        ESP_RETURN_ON_ERROR(fitipower_write_reg(dev, 0x11, multi == 64 ? (tmp | 0x04) : (tmp & 0xfb)),
+                            TAG, "fc0013 multi");
+    }
+
+    ESP_RETURN_ON_ERROR(fitipower_write_reg(dev, 0x0e, 0x80), TAG, "fitipower vco cal start");
+    ESP_RETURN_ON_ERROR(fitipower_write_reg(dev, 0x0e, 0x00), TAG, "fitipower vco cal stop");
+    ESP_RETURN_ON_ERROR(fitipower_write_reg(dev, 0x0e, 0x00), TAG, "fitipower vco cal clear");
+    vTaskDelay(pdMS_TO_TICKS(10));
+    ESP_RETURN_ON_ERROR(fitipower_read_reg(dev, 0x0e, &tmp), TAG, "fitipower vco status");
+    tmp &= 0x3f;
+    if (vco_select) {
+        if (tmp > 0x3c) {
+            reg[6] &= (uint8_t)~0x08;
+            ESP_RETURN_ON_ERROR(fitipower_write_reg(dev, 0x06, reg[6]), TAG, "fitipower vco low");
+            ESP_RETURN_ON_ERROR(fitipower_write_reg(dev, 0x0e, 0x80), TAG, "fitipower vco recal start");
+            ESP_RETURN_ON_ERROR(fitipower_write_reg(dev, 0x0e, 0x00), TAG, "fitipower vco recal stop");
+        }
+    } else if (tmp < 0x02) {
+        reg[6] |= 0x08;
+        ESP_RETURN_ON_ERROR(fitipower_write_reg(dev, 0x06, reg[6]), TAG, "fitipower vco high");
+        ESP_RETURN_ON_ERROR(fitipower_write_reg(dev, 0x0e, 0x80), TAG, "fitipower vco recal start");
+        ESP_RETURN_ON_ERROR(fitipower_write_reg(dev, 0x0e, 0x00), TAG, "fitipower vco recal stop");
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t fc0013_set_gain(rtlsdr_t *dev, bool manual, int gain_tenths_db)
+{
+    static const int gains[] = {
+        -99, 0x02, -73, 0x03, -65, 0x05, -63, 0x04,
+        -63, 0x00, -60, 0x07, -58, 0x01, -54, 0x06,
+        58, 0x0f, 61, 0x0e, 63, 0x0d, 65, 0x0c,
+        67, 0x0b, 68, 0x0a, 70, 0x09, 71, 0x08,
+        179, 0x17, 181, 0x16, 182, 0x15, 184, 0x14,
+        186, 0x13, 188, 0x12, 191, 0x11, 197, 0x10,
+    };
+
+    uint8_t tmp = 0;
+    ESP_RETURN_ON_ERROR(fitipower_read_reg(dev, 0x0d, &tmp), TAG, "fc0013 read gain mode");
+    ESP_RETURN_ON_ERROR(fitipower_write_reg(dev, 0x0d, manual ? (tmp | 0x08) : (tmp & (uint8_t)~0x08)),
+                        TAG, "fc0013 gain mode");
+    ESP_RETURN_ON_ERROR(fitipower_write_reg(dev, 0x13, 0x0a), TAG, "fc0013 IF gain");
+    if (!manual) {
+        return ESP_OK;
+    }
+
+    ESP_RETURN_ON_ERROR(fitipower_read_reg(dev, 0x14, &tmp), TAG, "fc0013 read LNA gain");
+    tmp &= 0xe0;
+    for (size_t i = 0; i < sizeof(gains) / sizeof(gains[0]) / 2; i++) {
+        if (gains[i * 2] >= gain_tenths_db || i + 1 == sizeof(gains) / sizeof(gains[0]) / 2) {
+            tmp |= (uint8_t)gains[i * 2 + 1];
+            break;
+        }
+    }
+    return fitipower_write_reg(dev, 0x14, tmp);
+}
+
+static esp_err_t fc0012_set_gain(rtlsdr_t *dev, bool manual, int gain_tenths_db)
+{
+    uint8_t tmp = 0;
+    if (!manual) {
+        return ESP_OK;
+    }
+
+    ESP_RETURN_ON_ERROR(fitipower_read_reg(dev, 0x13, &tmp), TAG, "fc0012 read gain");
+    tmp &= 0xe0;
+    if (gain_tenths_db < -40) {
+        tmp |= 0x02;
+    } else if (gain_tenths_db < 71) {
+        tmp |= 0x00;
+    } else if (gain_tenths_db < 179) {
+        tmp |= 0x08;
+    } else if (gain_tenths_db < 192) {
+        tmp |= 0x17;
+    } else {
+        tmp |= 0x10;
+    }
+    return fitipower_write_reg(dev, 0x13, tmp);
 }
 
 static uint8_t mask_reg8(uint8_t reg, uint8_t val, uint8_t mask)
@@ -667,15 +1092,14 @@ static esp_err_t r82xx_probe_addr(rtlsdr_t *dev,
 
     ESP_RETURN_ON_ERROR(rtlsdr_set_i2c_repeater(dev, true), TAG, "i2c repeater on");
     esp_err_t ret = rtlsdr_i2c_read_reg(dev, i2c_addr, R82XX_CHECK_ADDR, &reg);
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "%s probe addr 0x%02x failed: %s", name, i2c_addr, esp_err_to_name(ret));
-        return ret;
-    }
-
     esp_err_t off_ret = rtlsdr_set_i2c_repeater(dev, false);
     if (off_ret != ESP_OK) {
         ESP_LOGW(TAG, "%s probe repeater-off failed: %s", name, esp_err_to_name(off_ret));
         return off_ret;
+    }
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "%s probe addr 0x%02x failed: %s", name, i2c_addr, esp_err_to_name(ret));
+        return ret;
     }
 
     if (reg != R82XX_CHECK_VAL) {
@@ -683,6 +1107,7 @@ static esp_err_t r82xx_probe_addr(rtlsdr_t *dev,
         return ESP_ERR_NOT_FOUND;
     }
 
+    dev->tuner_type = RTL_TUNER_R82XX;
     dev->tuner_chip = chip;
     dev->tuner_i2c_addr = i2c_addr;
     ESP_LOGI(TAG, "Found Rafael %s tuner at 0x%02x", name, i2c_addr);
@@ -755,22 +1180,98 @@ static esp_err_t r82xx_set_freq(rtlsdr_t *dev, uint32_t center_freq_hz)
     return ESP_OK;
 }
 
+static esp_err_t rtlsdr_probe_tuner(rtlsdr_t *dev)
+{
+    esp_err_t ret = fitipower_probe_tuner(dev);
+    if (ret == ESP_OK) {
+        return ESP_OK;
+    }
+    if (ret != ESP_ERR_NOT_FOUND) {
+        vTaskDelay(pdMS_TO_TICKS(30));
+    }
+
+    ret = r82xx_probe_tuner(dev);
+    if (ret == ESP_OK) {
+        return ESP_OK;
+    }
+
+    dev->tuner_type = RTL_TUNER_NONE;
+    dev->tuner_chip = R82XX_CHIP_NONE;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+static esp_err_t rtlsdr_configure_tuner_if(rtlsdr_t *dev)
+{
+    if (dev->tuner_type == RTL_TUNER_R82XX) {
+        return rtlsdr_configure_r82xx_if(dev);
+    }
+    if (dev->tuner_type == RTL_TUNER_FC0012 || dev->tuner_type == RTL_TUNER_FC0013) {
+        ESP_RETURN_ON_ERROR(rtlsdr_set_if_freq(dev, 0), TAG, "set Fitipower IF");
+        ESP_RETURN_ON_ERROR(rtlsdr_demod_write_reg(dev, 0, 0x08, 0xcd, 1), TAG, "Fitipower I/Q ADC");
+        ESP_RETURN_ON_ERROR(rtlsdr_demod_write_reg(dev, 1, 0xb1, 0x1b, 1), TAG, "Fitipower zero IF");
+        ESP_RETURN_ON_ERROR(rtlsdr_demod_write_reg(dev, 1, 0x15, 0x00, 1), TAG, "Fitipower no inversion");
+        return rtlsdr_demod_write_reg(dev, 0, 0x06, 0x80, 1);
+    }
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+static esp_err_t rtlsdr_init_tuner(rtlsdr_t *dev)
+{
+    if (dev->tuner_type == RTL_TUNER_R82XX) {
+        return r82xx_init_tuner(dev);
+    }
+    if (dev->tuner_type == RTL_TUNER_FC0012 || dev->tuner_type == RTL_TUNER_FC0013) {
+        if (dev->tuner_type == RTL_TUNER_FC0012) {
+            ESP_RETURN_ON_ERROR(fc0012_init_tuner(dev), TAG, "init FC0012 tuner");
+        } else {
+            ESP_RETURN_ON_ERROR(fc0013_init_tuner(dev), TAG, "init FC0013 tuner");
+        }
+        ESP_RETURN_ON_ERROR(rtlsdr_set_i2c_repeater(dev, true), TAG, "i2c repeater on");
+        bool manual = dev->cfg.tuner_gain_tenths_db > 0;
+        esp_err_t ret = (dev->tuner_type == RTL_TUNER_FC0012)
+            ? fc0012_set_gain(dev, manual, dev->cfg.tuner_gain_tenths_db)
+            : fc0013_set_gain(dev, manual, dev->cfg.tuner_gain_tenths_db);
+        (void)rtlsdr_set_i2c_repeater(dev, false);
+        return ret;
+    }
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
 static esp_err_t rtlsdr_apply_center_freq(rtlsdr_t *dev, uint32_t center_freq_hz)
 {
-    if (!dev->dev_hdl || dev->tuner_chip == R82XX_CHIP_NONE || !dev->r82xx_init_done) {
+    if (!dev->dev_hdl || dev->tuner_type == RTL_TUNER_NONE) {
         return ESP_ERR_INVALID_STATE;
     }
 
     ESP_RETURN_ON_ERROR(rtlsdr_set_i2c_repeater(dev, true), TAG, "i2c repeater on");
-    esp_err_t ret = r82xx_set_freq(dev, center_freq_hz);
+    esp_err_t ret;
+    if (dev->tuner_type == RTL_TUNER_R82XX) {
+        if (dev->tuner_chip == R82XX_CHIP_NONE || !dev->r82xx_init_done) {
+            ret = ESP_ERR_INVALID_STATE;
+        } else {
+            ret = r82xx_set_freq(dev, center_freq_hz);
+        }
+    } else if (dev->tuner_type == RTL_TUNER_FC0012 || dev->tuner_type == RTL_TUNER_FC0013) {
+        if (!dev->fitipower_init_done) {
+            ret = ESP_ERR_INVALID_STATE;
+        } else {
+            ret = fitipower_set_params(dev, center_freq_hz, FC0013_BANDWIDTH_HZ);
+        }
+    } else {
+        ret = ESP_ERR_NOT_SUPPORTED;
+    }
     (void)rtlsdr_set_i2c_repeater(dev, false);
     if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "R82xx tune %lu Hz failed: %s", (unsigned long)center_freq_hz, esp_err_to_name(ret));
+        ESP_LOGW(TAG, "RTL-SDR tune %lu Hz failed: %s", (unsigned long)center_freq_hz, esp_err_to_name(ret));
         return ret;
     }
 
     dev->cfg.center_freq_hz = center_freq_hz;
-    ESP_LOGI(TAG, "RTL-SDR tuned to %lu Hz", (unsigned long)center_freq_hz);
+    ESP_LOGI(TAG,
+             "RTL-SDR tuned to %lu Hz (%s)",
+             (unsigned long)center_freq_hz,
+             dev->tuner_type == RTL_TUNER_FC0012 ? "FC0012" :
+             (dev->tuner_type == RTL_TUNER_FC0013 ? "FC0013" : "R82xx"));
     return ESP_OK;
 }
 
@@ -1000,6 +1501,8 @@ static void close_device(rtlsdr_t *dev)
     dev->streaming = false;
     dev->r82xx_init_done = false;
     dev->r82xx_has_lock = false;
+    dev->fitipower_init_done = false;
+    dev->tuner_type = RTL_TUNER_NONE;
     dev->tuner_chip = R82XX_CHIP_NONE;
     if (dev->dev_hdl) {
         if (dev->bulk_in_ep) {
@@ -1048,14 +1551,14 @@ static esp_err_t open_if_rtlsdr(rtlsdr_t *dev, uint8_t addr)
         return ret;
     }
 
-    ret = r82xx_probe_tuner(dev);
+    ret = rtlsdr_probe_tuner(dev);
     if (ret != ESP_OK) {
-        set_status(dev, "R820T/R828D TUNER NOT FOUND");
-        ESP_LOGW(TAG, "Only R820T/R828D tuner control is implemented in this ESP32 driver");
+        set_status(dev, "SUPPORTED TUNER NOT FOUND");
+        ESP_LOGW(TAG, "Supported tuners: FC0012, FC0013, R820T/R820T2, R828D/R860");
         return ret;
     }
-    ESP_RETURN_ON_ERROR(rtlsdr_configure_r82xx_if(dev), TAG, "configure R82xx IF");
-    ESP_RETURN_ON_ERROR(r82xx_init_tuner(dev), TAG, "init R82xx tuner");
+    ESP_RETURN_ON_ERROR(rtlsdr_configure_tuner_if(dev), TAG, "configure tuner IF");
+    ESP_RETURN_ON_ERROR(rtlsdr_init_tuner(dev), TAG, "init tuner");
     ESP_RETURN_ON_ERROR(rtlsdr_apply_center_freq(dev, dev->cfg.center_freq_hz), TAG, "initial tune");
     ESP_RETURN_ON_ERROR(start_bulk_stream(dev), TAG, "start stream");
     return ESP_OK;
@@ -1126,7 +1629,7 @@ static void rtlsdr_task(void *arg)
                 if (ret == ESP_ERR_NOT_FOUND) {
                     set_status(dev, "USB DEVICE IS NOT RTLSDR");
                 } else if (ret == ESP_ERR_NOT_SUPPORTED) {
-                    set_status(dev, "R820T/R828D TUNER NOT FOUND");
+                    set_status(dev, "SUPPORTED TUNER NOT FOUND");
                 } else if (ret != ESP_OK) {
                     ESP_LOGW(TAG, "open RTL-SDR failed: %s", esp_err_to_name(ret));
                     set_status(dev, "RTLSDR OPEN FAILED");

@@ -36,7 +36,7 @@ The display is now LVGL-based and mirrors the touch navigation from the Linux/Qt
 
 The waterfall layout follows the ESP32-DIV spectrum screens: a live FFT overview is drawn above the scrolling waterfall, the horizontal ruler marks the left edge, center, and right edge of the sampled span, and signal strength uses a blue/purple to yellow/white RGB565 palette. Narrow peaks are preserved when the FFT bins are scaled to the LCD width by taking the peak value in each output pixel column.
 
-The Waterfall page can now change the center frequency at runtime. The ESP32-side RTL-SDR task applies those requests to supported Rafael R820T/R820T2/R828D tuners, then continues streaming IQ data through the same FFT pipeline. Other tuner families still need their own driver path before they can tune on this target.
+The Waterfall page can now change the center frequency at runtime. The ESP32-side RTL-SDR task applies those requests to supported Fitipower FC0012/FC0013 and Rafael R820T/R820T2/R828D tuners, then continues streaming IQ data through the same FFT pipeline. Other tuner families still need their own driver path before they can tune on this target.
 
 The FM receiver follows the desktop `rtlsdr-display` demodulator structure: quadrature phase-difference FM detection, FIR audio low-pass filtering, decimation to PCM, DC blocking, and WFM deemphasis. Optional I2S output sends mono 16-bit PCM to an external DAC/amplifier when `RTL-SDR Waterfall -> FM Receiver -> Enable I2S audio output` is enabled and valid BCLK/WS/DOUT GPIOs are configured. I2S output is disabled by default so boards without an audio codec still build and run the FM spectrum/status page.
 
