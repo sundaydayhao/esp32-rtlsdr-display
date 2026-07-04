@@ -10,6 +10,7 @@
 static const char *TAG = "usb_host";
 static TaskHandle_t s_host_task;
 static bool s_started;
+static bool s_root_powered;
 
 static bool enum_filter_cb(const usb_device_desc_t *dev_desc, uint8_t *bConfigurationValue)
 {
@@ -23,7 +24,7 @@ static void usb_host_task(void *arg)
     TaskHandle_t waiter = (TaskHandle_t)arg;
     usb_host_config_t host_config = {
         .skip_phy_setup = false,
-        .root_port_unpowered = false,
+        .root_port_unpowered = true,
         .intr_flags = ESP_INTR_FLAG_LOWMED,
 #if CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK
         .enum_filter_cb = enum_filter_cb,
@@ -67,6 +68,7 @@ static void usb_host_task(void *arg)
     ESP_LOGI(TAG, "USB host uninstalling");
     ESP_ERROR_CHECK_WITHOUT_ABORT(usb_host_uninstall());
     s_started = false;
+    s_root_powered = false;
     s_host_task = NULL;
     vTaskDelete(NULL);
 }
@@ -92,4 +94,22 @@ esp_err_t usb_host_service_start(void)
     ESP_RETURN_ON_ERROR((esp_err_t)notify, TAG, "USB host task failed");
     s_started = true;
     return ESP_OK;
+}
+
+esp_err_t usb_host_service_power_on(void)
+{
+    if (!s_started) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (s_root_powered) {
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "Powering USB root port");
+    esp_err_t ret = usb_host_lib_set_root_port_power(true);
+    if (ret == ESP_OK) {
+        s_root_powered = true;
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
+    return ret;
 }

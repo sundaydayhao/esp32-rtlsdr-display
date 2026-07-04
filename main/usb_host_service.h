@@ -7,6 +7,7 @@ extern "C" {
 #endif
 
 esp_err_t usb_host_service_start(void);
+esp_err_t usb_host_service_power_on(void);
 
 #ifdef __cplusplus
 }

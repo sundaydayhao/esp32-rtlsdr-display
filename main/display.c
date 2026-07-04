@@ -25,6 +25,10 @@
 #define LVGL_TASK_MIN_DELAY_MS      (1000 / CONFIG_FREERTOS_HZ)
 #define WATERFALL_IMAGE_ALIGN       4
 #define TOUCH_TIMEOUT_MS            20
+#define WATERFALL_SWIPE_MIN_PX      40
+#define WATERFALL_SWIPE_MIN_HZ      1000
+#define CENTER_FREQ_MIN_HZ          24000000U
+#define CENTER_FREQ_MAX_HZ          1766000000U
 
 #define GT911_PRODUCT_ID_REG        0x8140
 #define GT911_STATUS_REG            0x814e
@@ -62,6 +66,8 @@ typedef struct {
 
 struct waterfall_display {
     waterfall_display_config_t cfg;
+    waterfall_center_freq_cb_t center_freq_cb;
+    void *center_freq_cb_ctx;
     esp_lcd_panel_handle_t panel;
     lv_display_t *lv_disp;
     void *lv_draw_buf;
@@ -73,29 +79,56 @@ struct waterfall_display {
     lv_obj_t *header_button;
     lv_obj_t *waterfall_img;
     lv_obj_t *side_panel;
+    lv_obj_t *freq_row;
     lv_obj_t *status_value_label;
     lv_obj_t *freq_value_label;
     lv_obj_t *rate_value_label;
     lv_obj_t *marker_value_label;
     lv_obj_t *touch_value_label;
+    lv_obj_t *fm_mode_value_label;
+    lv_obj_t *fm_audio_rate_value_label;
+    lv_obj_t *fm_audio_output_value_label;
+    lv_obj_t *fm_audio_level_bar;
+    lv_obj_t *fm_audio_level_label;
+    lv_obj_t *fm_center_large_label;
+    lv_obj_t *fm_status_large_label;
+    lv_obj_t *fm_waveform_img;
+    lv_obj_t *freq_dialog;
+    lv_obj_t *freq_textarea;
+    lv_obj_t *freq_digit_roller;
     lv_obj_t *placeholder_label;
     lv_image_dsc_t waterfall_dsc;
+    lv_image_dsc_t fm_waveform_dsc;
     uint16_t *waterfall_pixels;
+    uint16_t *fm_waveform_pixels;
     int waterfall_w;
     int waterfall_h;
+    int fm_waveform_w;
+    int fm_waveform_h;
     int spectrum_h;
     int ruler_h;
     char status[96];
     char touch_status[64];
+    char fm_mode[8];
     char footer_text[256];
     uint32_t center_hz;
     uint32_t sample_rate_hz;
+    uint32_t fm_audio_rate_hz;
+    uint8_t fm_audio_level;
     uint32_t marker_hz;
     bool marker_valid;
+    bool fm_audio_output_enabled;
+    bool fm_audio_output_ready;
     bool have_samples;
     bool waterfall_dirty;
+    bool fm_waveform_dirty;
     bool status_dirty;
     bool shutting_down;
+    bool waterfall_swipe_tracking;
+    bool waterfall_swipe_moved;
+    bool waterfall_suppress_next_click;
+    int waterfall_swipe_start_x;
+    int waterfall_swipe_start_y;
     app_page_t active_page;
     _lock_t lvgl_api_lock;
     TaskHandle_t lvgl_task_handle;
@@ -112,6 +145,17 @@ struct waterfall_display {
 
 static const char *TAG = "display";
 static waterfall_display_t *s_display;
+static void close_freq_dialog(waterfall_display_t *display);
+
+#ifndef CONFIG_FM_RECEIVER_NFM_MODE
+#define CONFIG_FM_RECEIVER_NFM_MODE 0
+#endif
+#ifndef CONFIG_FM_RECEIVER_I2S_OUTPUT
+#define CONFIG_FM_RECEIVER_I2S_OUTPUT 0
+#endif
+#ifndef CONFIG_FM_RECEIVER_AUDIO_RATE_HZ
+#define CONFIG_FM_RECEIVER_AUDIO_RATE_HZ 48000
+#endif
 
 static feature_def_t s_features[] = {
     {PAGE_ADSB, "ADS-B", "1090 MHz aircraft view", "#4cc9f0", {0}},
@@ -206,6 +250,117 @@ static void format_freq(char *buf, size_t len, int64_t hz, int decimals)
     }
 }
 
+static void format_freq_input(char *buf, size_t len, uint32_t hz)
+{
+    snprintf(buf, len, "%lu.%03lu", (unsigned long)(hz / 1000000U), (unsigned long)((hz % 1000000U) / 1000U));
+}
+
+static bool parse_mhz_input(const char *text, uint32_t *out_hz)
+{
+    if (!text || !out_hz) {
+        return false;
+    }
+
+    uint64_t whole_mhz = 0;
+    uint64_t frac_hz = 0;
+    uint32_t frac_scale = 1;
+    bool saw_digit = false;
+    bool saw_dot = false;
+
+    for (const char *p = text; *p; p++) {
+        char c = *p;
+        if (c == ' ' || c == '\t') {
+            continue;
+        }
+        if (c == '.') {
+            if (saw_dot) {
+                return false;
+            }
+            saw_dot = true;
+            continue;
+        }
+        if (c < '0' || c > '9') {
+            return false;
+        }
+
+        saw_digit = true;
+        uint32_t digit = (uint32_t)(c - '0');
+        if (!saw_dot) {
+            whole_mhz = whole_mhz * 10U + digit;
+            if (whole_mhz > UINT32_MAX / 1000000ULL) {
+                return false;
+            }
+        } else if (frac_scale < 1000000U) {
+            frac_hz = frac_hz * 10U + digit;
+            frac_scale *= 10U;
+        }
+    }
+
+    if (!saw_digit) {
+        return false;
+    }
+    while (frac_scale < 1000000U) {
+        frac_hz *= 10U;
+        frac_scale *= 10U;
+    }
+
+    uint64_t hz = whole_mhz * 1000000ULL + frac_hz;
+    if (hz < CENTER_FREQ_MIN_HZ) {
+        hz = CENTER_FREQ_MIN_HZ;
+    }
+    if (hz > CENTER_FREQ_MAX_HZ) {
+        hz = CENTER_FREQ_MAX_HZ;
+    }
+
+    *out_hz = (uint32_t)hz;
+    return true;
+}
+
+static void set_center_freq_locked(waterfall_display_t *display, uint32_t center_hz)
+{
+    if (center_hz < CENTER_FREQ_MIN_HZ) {
+        center_hz = CENTER_FREQ_MIN_HZ;
+    } else if (center_hz > CENTER_FREQ_MAX_HZ) {
+        center_hz = CENTER_FREQ_MAX_HZ;
+    }
+    if (display->center_hz == center_hz) {
+        return;
+    }
+
+    display->center_hz = center_hz;
+    display->marker_valid = false;
+    display->status_dirty = true;
+
+    if (display->center_freq_cb) {
+        display->center_freq_cb(center_hz, display->center_freq_cb_ctx);
+    }
+
+    char freq[32];
+    format_freq(freq, sizeof(freq), center_hz, 3);
+    ESP_LOGI(TAG, "Center frequency display set to %s", freq);
+}
+
+static void step_center_freq_locked(waterfall_display_t *display, int direction, int steps)
+{
+    if (direction == 0 || steps <= 0) {
+        return;
+    }
+
+    uint32_t step_hz = display->sample_rate_hz / 10U;
+    if (step_hz < WATERFALL_SWIPE_MIN_HZ) {
+        step_hz = WATERFALL_SWIPE_MIN_HZ;
+    }
+
+    int64_t delta = (int64_t)step_hz * steps * direction;
+    int64_t next = (int64_t)display->center_hz + delta;
+    if (next < CENTER_FREQ_MIN_HZ) {
+        next = CENTER_FREQ_MIN_HZ;
+    } else if (next > CENTER_FREQ_MAX_HZ) {
+        next = CENTER_FREQ_MAX_HZ;
+    }
+    set_center_freq_locked(display, (uint32_t)next);
+}
+
 static void fill_rect_rgb565(waterfall_display_t *display, int x, int y, int w, int h, uint16_t color)
 {
     if (!display->waterfall_pixels) {
@@ -240,6 +395,136 @@ static void fill_rect_rgb565(waterfall_display_t *display, int x, int y, int w, 
 static void draw_hline(waterfall_display_t *display, int x, int y, int w, uint16_t color)
 {
     fill_rect_rgb565(display, x, y, w, 1, color);
+}
+
+static void fm_fill_rect(waterfall_display_t *display, int x, int y, int w, int h, uint16_t color)
+{
+    if (!display->fm_waveform_pixels) {
+        return;
+    }
+    int x2 = x + w;
+    int y2 = y + h;
+    if (x < 0) {
+        x = 0;
+    }
+    if (y < 0) {
+        y = 0;
+    }
+    if (x2 > display->fm_waveform_w) {
+        x2 = display->fm_waveform_w;
+    }
+    if (y2 > display->fm_waveform_h) {
+        y2 = display->fm_waveform_h;
+    }
+    if (x >= x2 || y >= y2) {
+        return;
+    }
+
+    for (int row = y; row < y2; row++) {
+        uint16_t *dst = display->fm_waveform_pixels + row * display->fm_waveform_w + x;
+        for (int col = x; col < x2; col++) {
+            *dst++ = color;
+        }
+    }
+}
+
+static void fm_draw_line(waterfall_display_t *display, int x0, int y0, int x1, int y1, uint16_t color)
+{
+    int dx = abs(x1 - x0);
+    int sx = x0 < x1 ? 1 : -1;
+    int dy = -abs(y1 - y0);
+    int sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+
+    while (true) {
+        fm_fill_rect(display, x0, y0, 1, 1, color);
+        if (x0 == x1 && y0 == y1) {
+            break;
+        }
+        int e2 = 2 * err;
+        if (e2 >= dy) {
+            err += dy;
+            x0 += sx;
+        }
+        if (e2 <= dx) {
+            err += dx;
+            y0 += sy;
+        }
+    }
+}
+
+static void draw_fm_waveform_background(waterfall_display_t *display)
+{
+    if (!display->fm_waveform_pixels) {
+        return;
+    }
+    fm_fill_rect(display, 0, 0, display->fm_waveform_w, display->fm_waveform_h, rgb565(8, 13, 11));
+
+    uint16_t grid = rgb565(28, 48, 38);
+    for (int i = 0; i <= 8; i++) {
+        int x = (i == 8) ? display->fm_waveform_w - 1 : (display->fm_waveform_w * i) / 8;
+        fm_fill_rect(display, x, 0, 1, display->fm_waveform_h, grid);
+    }
+    for (int i = 0; i <= 4; i++) {
+        int y = (i == 4) ? display->fm_waveform_h - 1 : (display->fm_waveform_h * i) / 4;
+        fm_fill_rect(display, 0, y, display->fm_waveform_w, 1, grid);
+    }
+    fm_fill_rect(display, 0, display->fm_waveform_h / 2, display->fm_waveform_w, 2, rgb565(42, 75, 58));
+}
+
+static void draw_fm_waveform(waterfall_display_t *display, const int16_t *samples, size_t sample_count)
+{
+    if (!display->fm_waveform_pixels || !samples || sample_count == 0) {
+        return;
+    }
+
+    int peak = 1;
+    for (size_t i = 0; i < sample_count; i++) {
+        int v = samples[i];
+        if (v < 0) {
+            v = -v;
+        }
+        if (v > peak) {
+            peak = v;
+        }
+    }
+    if (peak < 1024) {
+        peak = 1024;
+    }
+
+    const int w = display->fm_waveform_w;
+    const int h = display->fm_waveform_h;
+    const int mid = h / 2;
+    int amplitude = (h / 2) - 8;
+    if (amplitude < 8) {
+        amplitude = h / 3;
+    }
+
+    const uint16_t glow = rgb565(42, 110, 70);
+    const uint16_t trace = rgb565(174, 232, 197);
+    int prev_x = 0;
+    int prev_y = mid;
+
+    for (int x = 0; x < w; x++) {
+        size_t index = (sample_count == 1 || w <= 1)
+            ? 0
+            : ((size_t)x * (sample_count - 1U)) / (size_t)(w - 1);
+        int y = mid - (int)(((int32_t)samples[index] * amplitude) / peak);
+        if (y < 3) {
+            y = 3;
+        } else if (y > h - 4) {
+            y = h - 4;
+        }
+
+        if (x == 0) {
+            fm_fill_rect(display, x, y, 1, 2, trace);
+        } else {
+            fm_draw_line(display, prev_x, prev_y + 1, x, y + 1, glow);
+            fm_draw_line(display, prev_x, prev_y, x, y, trace);
+        }
+        prev_x = x;
+        prev_y = y;
+    }
 }
 
 static void draw_vline(waterfall_display_t *display, int x, int y, int h, uint16_t color)
@@ -381,6 +666,9 @@ static void refresh_metrics_locked(waterfall_display_t *display)
     char freq[32];
     char rate[32];
     char marker[32];
+    char fm_audio_rate[32];
+    char fm_audio_output[32];
+    char fm_audio_level[16];
     format_freq(freq, sizeof(freq), display->center_hz, 3);
     snprintf(rate, sizeof(rate), "%.3f MSPS", (double)display->sample_rate_hz / 1000000.0);
     if (display->marker_valid) {
@@ -388,15 +676,22 @@ static void refresh_metrics_locked(waterfall_display_t *display)
     } else {
         snprintf(marker, sizeof(marker), "Tap spectrum");
     }
+    snprintf(fm_audio_rate, sizeof(fm_audio_rate), "%lu Hz", (unsigned long)display->fm_audio_rate_hz);
+    if (!display->fm_audio_output_enabled) {
+        snprintf(fm_audio_output, sizeof(fm_audio_output), "Off");
+    } else {
+        snprintf(fm_audio_output, sizeof(fm_audio_output), "%s", display->fm_audio_output_ready ? "I2S ready" : "I2S failed");
+    }
+    snprintf(fm_audio_level, sizeof(fm_audio_level), "%u%%", (unsigned)display->fm_audio_level);
 
     if (display->footer_label) {
         snprintf(display->footer_text,
                  sizeof(display->footer_text),
-                 "%.64s | %s | %s | %.36s",
-                 display->status,
+                 "%s | %s | FM %s %u%%",
                  freq,
                  rate,
-                 display->touch_status);
+                 display->fm_mode,
+                 (unsigned)display->fm_audio_level);
         lv_label_set_text(display->footer_label, display->footer_text);
     }
     if (display->status_value_label) {
@@ -404,6 +699,9 @@ static void refresh_metrics_locked(waterfall_display_t *display)
     }
     if (display->freq_value_label) {
         lv_label_set_text(display->freq_value_label, freq);
+    }
+    if (display->fm_center_large_label) {
+        lv_label_set_text(display->fm_center_large_label, freq);
     }
     if (display->rate_value_label) {
         lv_label_set_text(display->rate_value_label, rate);
@@ -413,6 +711,31 @@ static void refresh_metrics_locked(waterfall_display_t *display)
     }
     if (display->touch_value_label) {
         lv_label_set_text(display->touch_value_label, display->touch_status);
+    }
+    if (display->fm_mode_value_label) {
+        lv_label_set_text(display->fm_mode_value_label, display->fm_mode);
+    }
+    if (display->fm_audio_rate_value_label) {
+        lv_label_set_text(display->fm_audio_rate_value_label, fm_audio_rate);
+    }
+    if (display->fm_audio_output_value_label) {
+        lv_label_set_text(display->fm_audio_output_value_label, fm_audio_output);
+    }
+    if (display->fm_status_large_label) {
+        char fm_status[96];
+        snprintf(fm_status,
+                 sizeof(fm_status),
+                 "%s / audio %s / level %u%%",
+                 display->fm_mode,
+                 display->fm_audio_output_ready ? "ready" : (display->fm_audio_output_enabled ? "unavailable" : "off"),
+                 (unsigned)display->fm_audio_level);
+        lv_label_set_text(display->fm_status_large_label, fm_status);
+    }
+    if (display->fm_audio_level_bar) {
+        lv_bar_set_value(display->fm_audio_level_bar, display->fm_audio_level, LV_ANIM_OFF);
+    }
+    if (display->fm_audio_level_label) {
+        lv_label_set_text(display->fm_audio_level_label, fm_audio_level);
     }
 
     display->status_dirty = false;
@@ -427,6 +750,10 @@ static void update_lvgl_objects_locked(waterfall_display_t *display)
     if (display->waterfall_dirty && display->waterfall_img) {
         lv_obj_invalidate(display->waterfall_img);
         display->waterfall_dirty = false;
+    }
+    if (display->fm_waveform_dirty && display->fm_waveform_img) {
+        lv_obj_invalidate(display->fm_waveform_img);
+        display->fm_waveform_dirty = false;
     }
 }
 
@@ -513,23 +840,39 @@ static void style_button(lv_obj_t *button, lv_color_t bg, lv_color_t border, int
 
 static void clear_content(waterfall_display_t *display)
 {
+    close_freq_dialog(display);
     if (display->content) {
         lv_obj_clean(display->content);
     }
     display->header_button = NULL;
     display->waterfall_img = NULL;
     display->side_panel = NULL;
+    display->freq_row = NULL;
     display->status_value_label = NULL;
     display->freq_value_label = NULL;
     display->rate_value_label = NULL;
     display->marker_value_label = NULL;
     display->touch_value_label = NULL;
+    display->fm_mode_value_label = NULL;
+    display->fm_audio_rate_value_label = NULL;
+    display->fm_audio_output_value_label = NULL;
+    display->fm_audio_level_bar = NULL;
+    display->fm_audio_level_label = NULL;
+    display->fm_center_large_label = NULL;
+    display->fm_status_large_label = NULL;
+    display->fm_waveform_img = NULL;
+    display->freq_dialog = NULL;
+    display->freq_textarea = NULL;
+    display->freq_digit_roller = NULL;
     display->placeholder_label = NULL;
 }
 
-static lv_obj_t *metric_row(lv_obj_t *parent, const char *name, const char *value)
+static lv_obj_t *metric_row(lv_obj_t *parent, const char *name, const char *value, lv_obj_t **row_out)
 {
     lv_obj_t *box = lv_obj_create(parent);
+    if (row_out) {
+        *row_out = box;
+    }
     style_button(box, color_hex(0x0b0f13), color_hex(0x27313a), 6);
     lv_obj_set_width(box, LV_PCT(100));
     lv_obj_set_height(box, 48);
@@ -548,6 +891,178 @@ static lv_obj_t *metric_row(lv_obj_t *parent, const char *name, const char *valu
 }
 
 static void switch_page_locked(waterfall_display_t *display, app_page_t page);
+static void freq_row_event_cb(lv_event_t *event);
+
+static void close_freq_dialog(waterfall_display_t *display)
+{
+    if (display->freq_dialog) {
+        lv_obj_delete(display->freq_dialog);
+        display->freq_dialog = NULL;
+        display->freq_textarea = NULL;
+        display->freq_digit_roller = NULL;
+    }
+}
+
+static lv_obj_t *dialog_button(lv_obj_t *parent,
+                               const char *text,
+                               lv_color_t bg,
+                               lv_color_t border,
+                               int x,
+                               int y,
+                               int w,
+                               lv_event_cb_t cb,
+                               waterfall_display_t *display)
+{
+    lv_obj_t *button = lv_button_create(parent);
+    style_button(button, bg, border, 6);
+    lv_obj_set_size(button, w, 40);
+    lv_obj_align(button, LV_ALIGN_TOP_LEFT, x, y);
+    lv_obj_add_event_cb(button, cb, LV_EVENT_CLICKED, display);
+
+    lv_obj_t *label = create_label(button, text, 16, color_hex(0xf5f8fb), true);
+    lv_obj_center(label);
+    return button;
+}
+
+static void freq_digit_event_cb(lv_event_t *event)
+{
+    waterfall_display_t *display = lv_event_get_user_data(event);
+    if (!display || !display->freq_textarea || !display->freq_digit_roller) {
+        return;
+    }
+
+    char digit[2] = {0};
+    lv_roller_get_selected_str(display->freq_digit_roller, digit, sizeof(digit));
+    lv_textarea_add_text(display->freq_textarea, digit);
+}
+
+static void freq_dot_event_cb(lv_event_t *event)
+{
+    waterfall_display_t *display = lv_event_get_user_data(event);
+    if (!display || !display->freq_textarea) {
+        return;
+    }
+
+    const char *text = lv_textarea_get_text(display->freq_textarea);
+    if (text && strchr(text, '.') == NULL) {
+        lv_textarea_add_text(display->freq_textarea, ".");
+    }
+}
+
+static void freq_backspace_event_cb(lv_event_t *event)
+{
+    waterfall_display_t *display = lv_event_get_user_data(event);
+    if (display && display->freq_textarea) {
+        lv_textarea_delete_char(display->freq_textarea);
+    }
+}
+
+static void freq_cancel_event_cb(lv_event_t *event)
+{
+    waterfall_display_t *display = lv_event_get_user_data(event);
+    if (display) {
+        close_freq_dialog(display);
+    }
+}
+
+static void freq_ok_event_cb(lv_event_t *event)
+{
+    waterfall_display_t *display = lv_event_get_user_data(event);
+    if (!display || !display->freq_textarea) {
+        return;
+    }
+
+    uint32_t next_hz = 0;
+    if (parse_mhz_input(lv_textarea_get_text(display->freq_textarea), &next_hz)) {
+        set_center_freq_locked(display, next_hz);
+        close_freq_dialog(display);
+    }
+}
+
+static void open_freq_dialog_locked(waterfall_display_t *display)
+{
+    if (display->freq_dialog) {
+        return;
+    }
+
+    lv_obj_t *overlay = lv_obj_create(display->root);
+    display->freq_dialog = overlay;
+    style_button(overlay, color_hex(0x07090b), color_hex(0x26313a), 0);
+    lv_obj_set_size(overlay, display->cfg.h_res, display->cfg.v_res);
+    lv_obj_set_pos(overlay, 0, 0);
+    lv_obj_set_style_bg_opa(overlay, LV_OPA_90, 0);
+
+    int dialog_w = MIN(display->cfg.h_res - 48, 360);
+    int dialog_h = MIN(display->cfg.v_res - 40, 260);
+    lv_obj_t *panel = lv_obj_create(overlay);
+    style_button(panel, color_hex(0x11171c), color_hex(0x384653), 8);
+    lv_obj_set_size(panel, dialog_w, dialog_h);
+    lv_obj_center(panel);
+
+    lv_obj_t *title = create_label(panel, "Center Frequency", 16, color_hex(0xf5f8fb), true);
+    lv_obj_set_width(title, dialog_w - 32);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 16, 12);
+
+    lv_obj_t *unit = create_label(panel, "MHz", 14, color_hex(0x9fb0bd), false);
+    lv_obj_align(unit, LV_ALIGN_TOP_RIGHT, -18, 50);
+
+    lv_obj_t *ta = lv_textarea_create(panel);
+    display->freq_textarea = ta;
+    lv_obj_set_size(ta, dialog_w - 92, 44);
+    lv_obj_align(ta, LV_ALIGN_TOP_LEFT, 16, 40);
+    lv_textarea_set_one_line(ta, true);
+    lv_textarea_set_accepted_chars(ta, "0123456789.");
+    lv_textarea_set_max_length(ta, 12);
+    lv_textarea_set_password_mode(ta, false);
+    lv_textarea_set_placeholder_text(ta, "100.000");
+    lv_obj_set_style_text_font(ta, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(ta, color_hex(0xf4f8fb), 0);
+    lv_obj_set_style_bg_color(ta, color_hex(0x080c10), 0);
+    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(ta, color_hex(0x2e3a44), 0);
+    lv_obj_set_style_border_width(ta, 1, 0);
+    lv_obj_set_style_radius(ta, 6, 0);
+    char input[24];
+    format_freq_input(input, sizeof(input), display->center_hz);
+    lv_textarea_set_text(ta, input);
+    lv_textarea_set_cursor_pos(ta, LV_TEXTAREA_CURSOR_LAST);
+    lv_obj_add_state(ta, LV_STATE_FOCUSED);
+
+    static const char *digits = "0\n1\n2\n3\n4\n5\n6\n7\n8\n9";
+    lv_obj_t *roller = lv_roller_create(panel);
+    display->freq_digit_roller = roller;
+    lv_roller_set_options(roller, digits, LV_ROLLER_MODE_INFINITE);
+    lv_roller_set_visible_row_count(roller, 3);
+    lv_roller_set_selected(roller, 0, LV_ANIM_OFF);
+    lv_obj_set_size(roller, 76, 104);
+    lv_obj_align(roller, LV_ALIGN_TOP_LEFT, 16, 98);
+    lv_obj_set_style_bg_color(roller, color_hex(0x080c10), 0);
+    lv_obj_set_style_bg_opa(roller, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(roller, color_hex(0xf5f8fb), 0);
+    lv_obj_set_style_border_color(roller, color_hex(0x2e3a44), 0);
+    lv_obj_set_style_border_width(roller, 1, 0);
+    lv_obj_set_style_radius(roller, 6, 0);
+    lv_obj_set_style_bg_opa(roller, LV_OPA_40, LV_PART_SELECTED);
+
+    int x0 = 108;
+    int y0 = 98;
+    dialog_button(panel, "Add", color_hex(0x173022), color_hex(0x2f6f4d), x0, y0, 74, freq_digit_event_cb, display);
+    dialog_button(panel, ".", color_hex(0x19212a), color_hex(0x3a4b5a), x0 + 84, y0, 48, freq_dot_event_cb, display);
+    dialog_button(panel, "<", color_hex(0x2b1b1b), color_hex(0x6b3a3a), x0 + 142, y0, 54, freq_backspace_event_cb, display);
+    dialog_button(panel, "Cancel", color_hex(0x171d22), color_hex(0x3b4650), x0, y0 + 56, 88, freq_cancel_event_cb, display);
+    dialog_button(panel, "OK", color_hex(0x173022), color_hex(0x2f6f4d), x0 + 98, y0 + 56, 98, freq_ok_event_cb, display);
+
+    lv_obj_move_to_index(overlay, -1);
+}
+
+static void freq_row_event_cb(lv_event_t *event)
+{
+    waterfall_display_t *display = lv_event_get_user_data(event);
+    if (!display) {
+        return;
+    }
+    open_freq_dialog_locked(display);
+}
 
 static void tile_event_cb(lv_event_t *event)
 {
@@ -571,12 +1086,15 @@ static void waterfall_event_cb(lv_event_t *event)
     if (!indev) {
         return;
     }
+
+    lv_event_code_t code = lv_event_get_code(event);
     lv_point_t point = {0};
     lv_indev_get_point(indev, &point);
 
     lv_area_t coords;
     lv_obj_get_coords(lv_event_get_target(event), &coords);
     int w = coords.x2 - coords.x1 + 1;
+    int h = coords.y2 - coords.y1 + 1;
     if (w <= 0 || display->sample_rate_hz == 0) {
         return;
     }
@@ -588,8 +1106,53 @@ static void waterfall_event_cb(lv_event_t *event)
         rel_x = w - 1;
     }
 
+    int rel_y = point.y - coords.y1;
+    if (code == LV_EVENT_PRESSED) {
+        display->waterfall_swipe_tracking = (rel_y >= 0 && rel_y < h / 2);
+        display->waterfall_swipe_moved = false;
+        display->waterfall_suppress_next_click = false;
+        display->waterfall_swipe_start_x = point.x;
+        display->waterfall_swipe_start_y = point.y;
+        return;
+    }
+
+    if (code == LV_EVENT_PRESSING && display->waterfall_swipe_tracking) {
+        int dx = point.x - display->waterfall_swipe_start_x;
+        int dy = point.y - display->waterfall_swipe_start_y;
+        if (abs(dx) >= WATERFALL_SWIPE_MIN_PX && abs(dx) > abs(dy)) {
+            int steps = abs(dx) / WATERFALL_SWIPE_MIN_PX;
+            int direction = (dx < 0) ? 1 : -1;
+            step_center_freq_locked(display, direction, steps);
+            display->waterfall_swipe_start_x += (dx > 0) ? (steps * WATERFALL_SWIPE_MIN_PX) : -(steps * WATERFALL_SWIPE_MIN_PX);
+            display->waterfall_swipe_start_y = point.y;
+            display->waterfall_swipe_moved = true;
+            display->waterfall_suppress_next_click = true;
+        }
+        return;
+    }
+
+    if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+        display->waterfall_swipe_tracking = false;
+        return;
+    }
+
+    if (code != LV_EVENT_CLICKED) {
+        return;
+    }
+    if (display->waterfall_suppress_next_click || display->waterfall_swipe_moved) {
+        display->waterfall_suppress_next_click = false;
+        display->waterfall_swipe_moved = false;
+        return;
+    }
+
     int64_t left = (int64_t)display->center_hz - (int64_t)display->sample_rate_hz / 2;
-    uint32_t marker = (uint32_t)(left + ((int64_t)display->sample_rate_hz * rel_x) / w);
+    int64_t marker_hz = left + ((int64_t)display->sample_rate_hz * rel_x) / w;
+    if (marker_hz < 0) {
+        marker_hz = 0;
+    } else if (marker_hz > UINT32_MAX) {
+        marker_hz = UINT32_MAX;
+    }
+    uint32_t marker = (uint32_t)marker_hz;
     ESP_LOGI(TAG, "Waterfall marker touch x=%d -> %lu Hz", rel_x, (unsigned long)marker);
     display->marker_hz = marker;
     display->marker_valid = true;
@@ -668,6 +1231,69 @@ static void create_placeholder_visual(lv_obj_t *parent, const feature_def_t *fea
     lv_obj_align(message, LV_ALIGN_CENTER, 0, 18);
 }
 
+static void create_fm_visual_locked(waterfall_display_t *display, lv_obj_t *parent, const feature_def_t *feature)
+{
+    (void)feature;
+    lv_obj_t *waveform = lv_image_create(parent);
+    display->fm_waveform_img = waveform;
+    lv_image_set_src(waveform, &display->fm_waveform_dsc);
+    lv_obj_set_size(waveform, display->fm_waveform_w, display->fm_waveform_h);
+    lv_obj_center(waveform);
+    lv_obj_remove_flag(waveform, LV_OBJ_FLAG_SCROLLABLE);
+    draw_fm_waveform_background(display);
+    display->fm_waveform_dirty = true;
+}
+
+static void create_fm_side_panel_locked(waterfall_display_t *display, const feature_def_t *feature)
+{
+    lv_obj_t *side = lv_obj_create(display->content);
+    display->side_panel = side;
+    style_button(side, color_hex(0x101419), color_hex(0x2b3640), 8);
+    lv_obj_set_width(side, (display->cfg.h_res >= 760) ? 250 : 210);
+    lv_obj_set_height(side, LV_PCT(100));
+    lv_obj_align(side, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_flex_flow(side, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(side, 14, 0);
+    lv_obj_set_style_pad_row(side, 10, 0);
+
+    lv_obj_t *panel_title = create_label(side, feature->title, 16, color_hex(0xf3f6f8), true);
+    lv_obj_set_width(panel_title, LV_PCT(100));
+
+    display->freq_value_label = metric_row(side, "Center", "", &display->freq_row);
+    if (display->freq_row) {
+        lv_obj_add_flag(display->freq_row, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(display->freq_row, freq_row_event_cb, LV_EVENT_CLICKED, display);
+    }
+    display->fm_mode_value_label = metric_row(side, "Mode", "", NULL);
+    display->rate_value_label = metric_row(side, "IQ rate", "", NULL);
+    display->fm_audio_rate_value_label = metric_row(side, "Audio rate", "", NULL);
+    display->fm_audio_output_value_label = metric_row(side, "Audio output", "", NULL);
+
+    lv_obj_t *level_box = lv_obj_create(side);
+    style_button(level_box, color_hex(0x0b0f13), color_hex(0x27313a), 6);
+    lv_obj_set_width(level_box, LV_PCT(100));
+    lv_obj_set_height(level_box, 62);
+    lv_obj_set_style_pad_left(level_box, 12, 0);
+    lv_obj_set_style_pad_right(level_box, 12, 0);
+    lv_obj_set_style_pad_top(level_box, 8, 0);
+    lv_obj_set_style_pad_bottom(level_box, 8, 0);
+
+    lv_obj_t *name_label = create_label(level_box, "Audio level", 12, color_hex(0x8293a0), false);
+    lv_obj_set_width(name_label, LV_PCT(100));
+    lv_obj_align(name_label, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    display->fm_audio_level_bar = lv_bar_create(level_box);
+    lv_obj_set_size(display->fm_audio_level_bar, LV_PCT(100), 12);
+    lv_obj_align(display->fm_audio_level_bar, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_bar_set_range(display->fm_audio_level_bar, 0, 100);
+    lv_obj_set_style_bg_color(display->fm_audio_level_bar, color_hex(0x172018), 0);
+    lv_obj_set_style_bg_color(display->fm_audio_level_bar, feature->accent, LV_PART_INDICATOR);
+
+    display->fm_audio_level_label = create_label(level_box, "", 14, color_hex(0xeef6fb), true);
+    lv_obj_set_width(display->fm_audio_level_label, 56);
+    lv_obj_align(display->fm_audio_level_label, LV_ALIGN_TOP_RIGHT, 0, 0);
+}
+
 static void create_side_panel_locked(waterfall_display_t *display, const feature_def_t *feature, bool live_metrics)
 {
     lv_obj_t *side = lv_obj_create(display->content);
@@ -684,15 +1310,17 @@ static void create_side_panel_locked(waterfall_display_t *display, const feature
     lv_obj_set_width(panel_title, LV_PCT(100));
 
     if (live_metrics) {
-        display->status_value_label = metric_row(side, "Status", display->status);
-        display->freq_value_label = metric_row(side, "Center", "");
-        display->rate_value_label = metric_row(side, "Sample rate", "");
-        display->marker_value_label = metric_row(side, "Marker", "");
-        display->touch_value_label = metric_row(side, "Touch", display->touch_status);
+        display->freq_value_label = metric_row(side, "Center", "", &display->freq_row);
+        if (display->freq_row) {
+            lv_obj_add_flag(display->freq_row, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(display->freq_row, freq_row_event_cb, LV_EVENT_CLICKED, display);
+        }
+        display->rate_value_label = metric_row(side, "Sample rate", "", NULL);
+        display->marker_value_label = metric_row(side, "Marker", "", NULL);
     } else {
-        metric_row(side, "Runtime", "UI ready");
-        metric_row(side, "Driver", "Not wired");
-        metric_row(side, "Next step", "Add DSP page");
+        metric_row(side, "Runtime", "UI ready", NULL);
+        metric_row(side, "Driver", "Not wired", NULL);
+        metric_row(side, "Next step", "Add DSP page", NULL);
     }
 }
 
@@ -736,6 +1364,11 @@ static void create_feature_locked(waterfall_display_t *display, app_page_t page)
         lv_obj_set_size(img, display->waterfall_w, display->waterfall_h);
         lv_obj_center(img);
         lv_obj_add_flag(img, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_remove_flag(img, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_event_cb(img, waterfall_event_cb, LV_EVENT_PRESSED, display);
+        lv_obj_add_event_cb(img, waterfall_event_cb, LV_EVENT_PRESSING, display);
+        lv_obj_add_event_cb(img, waterfall_event_cb, LV_EVENT_RELEASED, display);
+        lv_obj_add_event_cb(img, waterfall_event_cb, LV_EVENT_PRESS_LOST, display);
         lv_obj_add_event_cb(img, waterfall_event_cb, LV_EVENT_CLICKED, display);
         draw_waterfall_background(display);
         draw_ruler(display);
@@ -743,11 +1376,14 @@ static void create_feature_locked(waterfall_display_t *display, app_page_t page)
         if (side_w > 0) {
             create_side_panel_locked(display, feature, true);
         }
+    } else if (page == PAGE_FM) {
+        create_fm_visual_locked(display, visual, feature);
+        if (side_w > 0) {
+            create_fm_side_panel_locked(display, feature);
+        }
     } else {
         const char *body = "This page mirrors the desktop app navigation. Decoder and tuner logic are not implemented on this ESP32 target yet.";
-        if (page == PAGE_FM) {
-            body = "FM page placeholder. The current firmware has IQ capture and FFT display, but no WFM/NFM demodulator or audio output yet.";
-        } else if (page == PAGE_ADSB) {
+        if (page == PAGE_ADSB) {
             body = "ADS-B page placeholder. Mode S decoding and aircraft model from the desktop app still need an ESP32 implementation.";
         } else if (page == PAGE_SCANNER) {
             body = "Scanner page placeholder. Wideband multi-hop scanning requires runtime tuner control before it can be enabled.";
@@ -1207,6 +1843,48 @@ static esp_err_t alloc_waterfall_image(waterfall_display_t *display)
     return ESP_OK;
 }
 
+static esp_err_t alloc_fm_waveform_image(waterfall_display_t *display)
+{
+    int side_panel = (display->cfg.h_res >= 620) ? ((display->cfg.h_res >= 760) ? 250 : 210) : 0;
+    int available_w = display->cfg.h_res - 32 - side_panel - (side_panel ? 14 : 0);
+    int available_h = display->cfg.v_res - 136;
+    if (available_w < 260 || display->cfg.h_res < 620) {
+        available_w = display->cfg.h_res - 32;
+    }
+    if (available_h < 160) {
+        available_h = display->cfg.v_res - 122;
+    }
+
+    display->fm_waveform_w = available_w;
+    if (display->fm_waveform_w < 120) {
+        display->fm_waveform_w = 120;
+    }
+
+    display->fm_waveform_h = available_h;
+    if (display->fm_waveform_h < 48) {
+        display->fm_waveform_h = 48;
+    }
+
+    size_t bytes = (size_t)display->fm_waveform_w * display->fm_waveform_h * sizeof(uint16_t);
+    display->fm_waveform_pixels = heap_caps_aligned_alloc(WATERFALL_IMAGE_ALIGN,
+                                                          bytes,
+                                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!display->fm_waveform_pixels) {
+        display->fm_waveform_pixels = heap_caps_aligned_alloc(WATERFALL_IMAGE_ALIGN, bytes, MALLOC_CAP_8BIT);
+    }
+    ESP_RETURN_ON_FALSE(display->fm_waveform_pixels, ESP_ERR_NO_MEM, TAG, "FM waveform pixels");
+    memset(display->fm_waveform_pixels, 0, bytes);
+
+    display->fm_waveform_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    display->fm_waveform_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+    display->fm_waveform_dsc.header.w = display->fm_waveform_w;
+    display->fm_waveform_dsc.header.h = display->fm_waveform_h;
+    display->fm_waveform_dsc.data_size = bytes;
+    display->fm_waveform_dsc.data = (const uint8_t *)display->fm_waveform_pixels;
+    draw_fm_waveform_background(display);
+    return ESP_OK;
+}
+
 esp_err_t waterfall_display_create(const waterfall_display_config_t *config, waterfall_display_t **out)
 {
     ESP_RETURN_ON_FALSE(config && out, ESP_ERR_INVALID_ARG, TAG, "bad args");
@@ -1218,6 +1896,10 @@ esp_err_t waterfall_display_create(const waterfall_display_config_t *config, wat
     display->cfg = *config;
     display->center_hz = CONFIG_RTLSDR_CENTER_FREQ_HZ;
     display->sample_rate_hz = CONFIG_RTLSDR_SAMPLE_RATE;
+    display->fm_audio_rate_hz = CONFIG_FM_RECEIVER_AUDIO_RATE_HZ;
+    display->fm_audio_output_enabled = CONFIG_FM_RECEIVER_I2S_OUTPUT;
+    display->fm_audio_output_ready = false;
+    snprintf(display->fm_mode, sizeof(display->fm_mode), "%s", CONFIG_FM_RECEIVER_NFM_MODE ? "NFM" : "WFM");
     strcpy(display->status, "WAITING FOR RTL2832U");
 #if CONFIG_TOUCH_ENABLED
     strcpy(display->touch_status, "touch probing");
@@ -1228,6 +1910,7 @@ esp_err_t waterfall_display_create(const waterfall_display_config_t *config, wat
 
     ESP_GOTO_ON_ERROR(setup_rgb_panel(display), fail, TAG, "rgb panel");
     ESP_GOTO_ON_ERROR(alloc_waterfall_image(display), fail, TAG, "waterfall image");
+    ESP_GOTO_ON_ERROR(alloc_fm_waveform_image(display), fail, TAG, "FM waveform image");
     draw_waterfall_background(display);
     draw_ruler(display);
     ESP_GOTO_ON_ERROR(setup_lvgl(display), fail, TAG, "lvgl");
@@ -1300,6 +1983,7 @@ void waterfall_display_destroy(waterfall_display_t *display)
     }
     heap_caps_free(display->lv_draw_buf);
     heap_caps_free(display->waterfall_pixels);
+    heap_caps_free(display->fm_waveform_pixels);
     if (s_display == display) {
         s_display = NULL;
     }
@@ -1329,6 +2013,56 @@ void waterfall_display_set_radio_info(waterfall_display_t *display, uint32_t cen
     display->status_dirty = true;
     draw_ruler(display);
     mark_waterfall_dirty(display);
+    _lock_release(&display->lvgl_api_lock);
+}
+
+void waterfall_display_set_fm_info(waterfall_display_t *display,
+                                   const char *mode,
+                                   uint32_t audio_rate_hz,
+                                   bool audio_output_enabled,
+                                   bool audio_output_ready,
+                                   uint8_t audio_level)
+{
+    if (!display) {
+        return;
+    }
+    _lock_acquire(&display->lvgl_api_lock);
+    if (mode && mode[0]) {
+        snprintf(display->fm_mode, sizeof(display->fm_mode), "%s", mode);
+    }
+    display->fm_audio_rate_hz = audio_rate_hz;
+    display->fm_audio_output_enabled = audio_output_enabled;
+    display->fm_audio_output_ready = audio_output_ready;
+    display->fm_audio_level = audio_level > 100 ? 100 : audio_level;
+    display->status_dirty = true;
+    _lock_release(&display->lvgl_api_lock);
+}
+
+void waterfall_display_push_fm_waveform(waterfall_display_t *display, const int16_t *samples, size_t sample_count)
+{
+    if (!display || !samples || sample_count == 0 || !display->fm_waveform_pixels) {
+        return;
+    }
+
+    _lock_acquire(&display->lvgl_api_lock);
+    if (display->active_page == PAGE_FM || display->fm_waveform_img) {
+        draw_fm_waveform_background(display);
+        draw_fm_waveform(display, samples, sample_count);
+        display->fm_waveform_dirty = true;
+    }
+    _lock_release(&display->lvgl_api_lock);
+}
+
+void waterfall_display_set_center_freq_cb(waterfall_display_t *display,
+                                          waterfall_center_freq_cb_t cb,
+                                          void *ctx)
+{
+    if (!display) {
+        return;
+    }
+    _lock_acquire(&display->lvgl_api_lock);
+    display->center_freq_cb = cb;
+    display->center_freq_cb_ctx = ctx;
     _lock_release(&display->lvgl_api_lock);
 }
 

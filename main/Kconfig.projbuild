@@ -6,14 +6,16 @@ menu "RTL-SDR Waterfall"
             default y
             help
                 Sends a compact RTL2832U baseband startup sequence before streaming.
-                This does not yet program the external R820T/R828D tuner PLL.
+                Common R820T/R820T2/R828D tuner PLL control is configured after
+                the RTL2832U baseband path is initialized.
 
         config RTLSDR_CENTER_FREQ_HZ
             int "Center frequency in Hz"
             default 100000000
             help
-                Displayed center frequency. Full R820T/R828D PLL tuning is isolated
-                for the next bring-up step in main/rtlsdr.c.
+                Initial center frequency. Runtime changes from the Waterfall UI
+                are sent to the RTL-SDR task and applied to supported R820T/R828D
+                tuners.
 
         config RTLSDR_SAMPLE_RATE
             int "Sample rate in samples per second"
@@ -36,8 +38,8 @@ menu "RTL-SDR Waterfall"
             int "Tuner gain in tenths of dB"
             default 0
             help
-                Reserved for the external tuner driver. Zero means automatic gain
-                once tuner gain control is implemented.
+                Zero uses R820T/R828D automatic gain. Non-zero enables a simple
+                manual R82xx gain split across LNA and mixer stages.
     endmenu
 
     menu "FFT"
@@ -71,6 +73,50 @@ menu "RTL-SDR Waterfall"
         config WATERFALL_DB_MAX
             int "Waterfall maximum dB"
             default -20
+    endmenu
+
+    menu "FM Receiver"
+        config FM_RECEIVER_NFM_MODE
+            bool "Use narrowband FM mode"
+            default n
+            help
+                Uses narrowband FM voice parameters. Leave disabled for broadcast
+                wideband FM reception.
+
+        config FM_RECEIVER_AUDIO_RATE_HZ
+            int "FM audio sample rate in Hz"
+            default 48000
+            range 8000 96000
+            help
+                PCM output sample rate after FM demodulation.
+
+        config FM_RECEIVER_VOLUME_PERCENT
+            int "FM audio volume percent"
+            default 80
+            range 0 150
+
+        config FM_RECEIVER_I2S_OUTPUT
+            bool "Enable I2S audio output"
+            default n
+            help
+                Outputs mono 16-bit PCM through the ESP-IDF I2S standard-mode
+                driver. Keep disabled when no external I2S DAC or amplifier is
+                connected.
+
+        config FM_RECEIVER_I2S_BCLK_GPIO
+            int "I2S BCLK GPIO"
+            depends on FM_RECEIVER_I2S_OUTPUT
+            default -1
+
+        config FM_RECEIVER_I2S_WS_GPIO
+            int "I2S WS/LRCLK GPIO"
+            depends on FM_RECEIVER_I2S_OUTPUT
+            default -1
+
+        config FM_RECEIVER_I2S_DOUT_GPIO
+            int "I2S DOUT GPIO"
+            depends on FM_RECEIVER_I2S_OUTPUT
+            default -1
     endmenu
 
     menu "LCD"

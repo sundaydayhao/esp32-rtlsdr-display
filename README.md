@@ -20,6 +20,7 @@ Important menuconfig entries are under `RTL-SDR Waterfall`:
 
 - Displayed center frequency and RTL2832U sample rate.
 - FFT size and waterfall dimensions.
+- FM receiver mode, PCM sample rate, volume, and optional I2S audio output GPIOs.
 - LCD RGB timing and GPIO mapping.
 - LVGL draw buffer/task sizing.
 - I2C touch input. The default ESP32-S31-Korvo-1 LCD subboard setting uses SDA GPIO0, SCL GPIO1, and GT911 address 0x14. The firmware also probes FT5x06-compatible controllers; set SDA/SCL/INT/RST and axis transform options to match other LCD subboards.
@@ -31,10 +32,12 @@ The first hardware bring-up should use the default low sample rate. Raise it onl
 
 This project currently validates the ESP-IDF path end to end: USB Host enumeration, RTL2832U bulk IN transfers, IQ buffering, FFT processing, and RGB LCD waterfall drawing. If no RTL-SDR stream is available, it draws a synthetic waterfall so the LCD path can be tested independently.
 
-The display is now LVGL-based and mirrors the touch navigation from the Linux/Qt `rtlsdr-display` project. The home screen exposes ADS-B, FM, Waterfall, Sensors, IQ Record, and Scanner tiles. The Waterfall page is wired to the existing live FFT pipeline and supports touch selection of a marker frequency. The other feature pages are present as LVGL navigation targets and status/configuration placeholders until their ESP32-side decoder, audio, tuner-control, storage, or scanner logic is implemented.
+The display is now LVGL-based and mirrors the touch navigation from the Linux/Qt `rtlsdr-display` project. The home screen exposes ADS-B, FM, Waterfall, Sensors, IQ Record, and Scanner tiles. The Waterfall page is wired to the existing live FFT pipeline and supports touch selection of a marker frequency. The FM page uses the same RTL-SDR IQ stream for WFM/NFM demodulation, shows the decoded audio waveform with audio level/output status, and can tune the shared center frequency. The remaining feature pages are present as LVGL navigation targets and status/configuration placeholders until their ESP32-side decoder, storage, or scanner logic is implemented.
 
 The waterfall layout follows the ESP32-DIV spectrum screens: a live FFT overview is drawn above the scrolling waterfall, the horizontal ruler marks the left edge, center, and right edge of the sampled span, and signal strength uses a blue/purple to yellow/white RGB565 palette. Narrow peaks are preserved when the FFT bins are scaled to the LCD width by taking the peak value in each output pixel column.
 
-The external tuner PLL/gain programming for common R820T/R828D RTL-SDR dongles is intentionally isolated in `main/rtlsdr.c` and is the next hardware-specific step. Until that is filled in, the center-frequency setting is shown on screen but does not tune the RF front end.
+The Waterfall page can now change the center frequency at runtime. The ESP32-side RTL-SDR task applies those requests to supported Rafael R820T/R820T2/R828D tuners, then continues streaming IQ data through the same FFT pipeline. Other tuner families still need their own driver path before they can tune on this target.
+
+The FM receiver follows the desktop `rtlsdr-display` demodulator structure: quadrature phase-difference FM detection, FIR audio low-pass filtering, decimation to PCM, DC blocking, and WFM deemphasis. Optional I2S output sends mono 16-bit PCM to an external DAC/amplifier when `RTL-SDR Waterfall -> FM Receiver -> Enable I2S audio output` is enabled and valid BCLK/WS/DOUT GPIOs are configured. I2S output is disabled by default so boards without an audio codec still build and run the FM spectrum/status page.
 
 Some RGB LCD subboards also require controller initialization over the ESP32-S31-Korvo-1 3-wire LCD SPI pins before the RGB stream is visible. The RGB data/timing path is implemented; add the subboard's panel-init table if the backlight turns on but no image appears.

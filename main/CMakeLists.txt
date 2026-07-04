@@ -3,6 +3,7 @@ idf_component_register(
         "app_main.c"
         "display.c"
         "dsp.c"
+        "fm_receiver.c"
         "rtlsdr.c"
         "usb_host_service.c"
     INCLUDE_DIRS "."
@@ -10,6 +11,7 @@ idf_component_register(
         esp_lcd
         esp_driver_gpio
         esp_driver_i2c
+        esp_driver_i2s
         esp_ringbuf
         esp_timer
         lvgl
