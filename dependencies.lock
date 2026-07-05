@@ -1,4 +1,14 @@
 dependencies:
+  espressif/esp_codec_dev:
+    component_hash: df70f10af8d7b922add7b9d07372c9c97ab356e58d72b7a892050227c2d44348
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.5.11
   espressif/usb:
     component_hash: 1d90d7c7b0682dbfcc36f47cf5acf224a5cfb850a62f39cd86d3159cfec12a81
     dependencies:
@@ -28,9 +38,10 @@ dependencies:
       type: service
     version: 9.5.0
 direct_dependencies:
+- espressif/esp_codec_dev
 - espressif/usb
 - idf
 - lvgl/lvgl
-manifest_hash: 1b018bb3a07ebaf24f1d285e819df372be35f003f7d86fbe24b998944c82e71e
+manifest_hash: 5fe18201605edd6070ae0b7eedb4523f93c204972e18bf30b884e07074314526
 target: esp32s31
 version: 3.0.0

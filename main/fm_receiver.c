@@ -3,14 +3,13 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-#include "driver/i2s_common.h"
-#include "driver/i2s_std.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/ringbuf.h"
 #include "freertos/task.h"
+#include "korvo_audio.h"
 
 #define FM_WFM_AUDIO_CUTOFF_HZ     16000.0f
 #define FM_NFM_AUDIO_CUTOFF_HZ     5500.0f
@@ -65,7 +64,7 @@ struct fm_receiver {
     RingbufHandle_t pcm_ring;
     TaskHandle_t audio_task;
     volatile bool audio_task_stop;
-    i2s_chan_handle_t i2s_tx;
+    korvo_audio_output_t *audio_output;
 };
 
 static const char *TAG = "fm_receiver";
@@ -186,7 +185,7 @@ static void submit_pcm_frame(fm_receiver_t *fm)
         return;
     }
 
-    bool sent = !fm->cfg.i2s_enabled;
+    bool sent = fm->cfg.audio_output == FM_RECEIVER_AUDIO_OUTPUT_NONE;
     if (fm->pcm_ring) {
         size_t bytes = fm->pcm_frame_used * sizeof(fm->pcm_frame[0]);
         sent = xRingbufferSend(fm->pcm_ring, fm->pcm_frame, bytes, 0) == pdTRUE;
@@ -256,43 +255,39 @@ static bool demod_sample(fm_receiver_t *fm, uint8_t raw_i, uint8_t raw_q, int16_
     return true;
 }
 
-static esp_err_t init_i2s(fm_receiver_t *fm)
+static esp_err_t init_audio_output(fm_receiver_t *fm)
 {
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
-    chan_cfg.dma_desc_num = 6;
-    chan_cfg.dma_frame_num = 240;
+    if (fm->cfg.audio_output == FM_RECEIVER_AUDIO_OUTPUT_NONE) {
+        return ESP_OK;
+    }
+    ESP_RETURN_ON_FALSE(fm->cfg.audio_output == FM_RECEIVER_AUDIO_OUTPUT_KORVO_SPEAKER,
+                        ESP_ERR_NOT_SUPPORTED,
+                        TAG,
+                        "unsupported audio output");
 
-    ESP_RETURN_ON_ERROR(i2s_new_channel(&chan_cfg, &fm->i2s_tx, NULL), TAG, "new i2s tx");
-
-    i2s_std_config_t std_cfg = {
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(fm->profile.audio_rate_hz),
-        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
-        .gpio_cfg = {
-            .mclk = I2S_GPIO_UNUSED,
-            .bclk = (gpio_num_t)fm->cfg.i2s_bclk_gpio,
-            .ws = (gpio_num_t)fm->cfg.i2s_ws_gpio,
-            .dout = (gpio_num_t)fm->cfg.i2s_dout_gpio,
-            .din = I2S_GPIO_UNUSED,
-            .invert_flags = {
-                .mclk_inv = false,
-                .bclk_inv = false,
-                .ws_inv = false,
-            },
-        },
+    korvo_audio_output_config_t audio_cfg = {
+        .sample_rate_hz = fm->profile.audio_rate_hz,
+        .volume_percent = fm->cfg.volume_percent,
+        .i2c_port = fm->cfg.audio_i2c_port,
+        .i2c_sda_gpio = fm->cfg.audio_i2c_sda_gpio,
+        .i2c_scl_gpio = fm->cfg.audio_i2c_scl_gpio,
+        .i2s_port = fm->cfg.audio_i2s_port,
+        .i2s_bclk_gpio = fm->cfg.audio_i2s_bclk_gpio,
+        .i2s_ws_gpio = fm->cfg.audio_i2s_ws_gpio,
+        .i2s_dout_gpio = fm->cfg.audio_i2s_dout_gpio,
+        .i2s_din_gpio = fm->cfg.audio_i2s_din_gpio,
+        .i2s_mclk_gpio = fm->cfg.audio_i2s_mclk_gpio,
+        .pa_gpio = fm->cfg.audio_pa_gpio,
     };
-    ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(fm->i2s_tx, &std_cfg), TAG, "init i2s std");
-    ESP_RETURN_ON_ERROR(i2s_channel_enable(fm->i2s_tx), TAG, "enable i2s tx");
-    return ESP_OK;
+    return korvo_audio_output_create(&audio_cfg, &fm->audio_output);
 }
 
-static void deinit_i2s(fm_receiver_t *fm)
+static void deinit_audio_output(fm_receiver_t *fm)
 {
-    if (!fm->i2s_tx) {
-        return;
+    if (fm->audio_output) {
+        korvo_audio_output_destroy(fm->audio_output);
+        fm->audio_output = NULL;
     }
-    (void)i2s_channel_disable(fm->i2s_tx);
-    (void)i2s_del_channel(fm->i2s_tx);
-    fm->i2s_tx = NULL;
 }
 
 static void audio_task(void *arg)
@@ -307,10 +302,15 @@ static void audio_task(void *arg)
             continue;
         }
 
-        if (fm->i2s_tx) {
+        if (fm->audio_output) {
+            size_t sample_count = item_size / sizeof(int16_t);
             size_t written = 0;
-            esp_err_t ret = i2s_channel_write(fm->i2s_tx, item, item_size, &written, pdMS_TO_TICKS(40));
-            if (ret != ESP_OK || written != item_size) {
+            esp_err_t ret = korvo_audio_output_write_mono(fm->audio_output,
+                                                          (const int16_t *)item,
+                                                          sample_count,
+                                                          40,
+                                                          &written);
+            if (ret != ESP_OK || written != sample_count) {
                 portENTER_CRITICAL(&fm->status_lock);
                 fm->status.dropped_audio_frames++;
                 portEXIT_CRITICAL(&fm->status_lock);
@@ -356,7 +356,7 @@ esp_err_t fm_receiver_create(const fm_receiver_config_t *config, fm_receiver_t *
     fm->status.mode = fm->cfg.mode;
     fm->status.sample_rate_hz = fm->cfg.sample_rate_hz;
     fm->status.audio_rate_hz = fm->profile.audio_rate_hz;
-    fm->status.audio_output_enabled = fm->cfg.i2s_enabled;
+    fm->status.audio_output_enabled = fm->cfg.audio_output != FM_RECEIVER_AUDIO_OUTPUT_NONE;
     fm->waveform_decimation = (fm->profile.audio_rate_hz * FM_WAVEFORM_INTERVAL_MS) /
                               (1000U * FM_WAVEFORM_SAMPLES);
     if (fm->waveform_decimation < 1) {
@@ -365,16 +365,16 @@ esp_err_t fm_receiver_create(const fm_receiver_config_t *config, fm_receiver_t *
 
     build_low_pass_taps(fm);
 
-    if (fm->cfg.i2s_enabled) {
+    if (fm->cfg.audio_output != FM_RECEIVER_AUDIO_OUTPUT_NONE) {
         fm->pcm_ring = xRingbufferCreate(FM_PCM_RING_BYTES, RINGBUF_TYPE_BYTEBUF);
         if (!fm->pcm_ring) {
             fm_receiver_destroy(fm);
             return ESP_ERR_NO_MEM;
         }
 
-        esp_err_t ret = init_i2s(fm);
+        esp_err_t ret = init_audio_output(fm);
         if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "I2S audio disabled: %s", esp_err_to_name(ret));
+            ESP_LOGW(TAG, "FM audio output disabled: %s", esp_err_to_name(ret));
             fm->status.audio_output_ready = false;
         } else {
             fm->status.audio_output_ready = true;
@@ -392,7 +392,8 @@ esp_err_t fm_receiver_create(const fm_receiver_config_t *config, fm_receiver_t *
              (unsigned long)fm->cfg.sample_rate_hz,
              (unsigned long)fm->profile.audio_rate_hz,
              (unsigned long)fm->decimation,
-             fm->status.audio_output_ready ? "ready" : (fm->cfg.i2s_enabled ? "failed" : "off"));
+             fm->status.audio_output_ready ? "ready" :
+             (fm->cfg.audio_output != FM_RECEIVER_AUDIO_OUTPUT_NONE ? "failed" : "off"));
 
     *out = fm;
     return ESP_OK;
@@ -410,7 +411,7 @@ void fm_receiver_destroy(fm_receiver_t *fm)
             vTaskDelay(pdMS_TO_TICKS(20));
         }
     }
-    deinit_i2s(fm);
+    deinit_audio_output(fm);
     if (fm->pcm_ring) {
         vRingbufferDelete(fm->pcm_ring);
     }

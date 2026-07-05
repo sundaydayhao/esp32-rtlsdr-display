@@ -17,15 +17,27 @@ typedef enum {
     FM_RECEIVER_MODE_NFM,
 } fm_receiver_mode_t;
 
+typedef enum {
+    FM_RECEIVER_AUDIO_OUTPUT_NONE = 0,
+    FM_RECEIVER_AUDIO_OUTPUT_KORVO_SPEAKER,
+} fm_receiver_audio_output_t;
+
 typedef struct {
     fm_receiver_mode_t mode;
     uint32_t sample_rate_hz;
     uint32_t audio_rate_hz;
     int volume_percent;
-    bool i2s_enabled;
-    int i2s_bclk_gpio;
-    int i2s_ws_gpio;
-    int i2s_dout_gpio;
+    fm_receiver_audio_output_t audio_output;
+    int audio_i2c_port;
+    int audio_i2c_sda_gpio;
+    int audio_i2c_scl_gpio;
+    int audio_i2s_port;
+    int audio_i2s_mclk_gpio;
+    int audio_i2s_bclk_gpio;
+    int audio_i2s_ws_gpio;
+    int audio_i2s_dout_gpio;
+    int audio_i2s_din_gpio;
+    int audio_pa_gpio;
     fm_receiver_waveform_cb_t waveform_cb;
     void *waveform_cb_ctx;
 } fm_receiver_config_t;

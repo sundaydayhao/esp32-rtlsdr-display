@@ -20,7 +20,7 @@ Important menuconfig entries are under `RTL-SDR Waterfall`:
 
 - Displayed center frequency and RTL2832U sample rate.
 - FFT size and waterfall dimensions.
-- FM receiver mode, PCM sample rate, volume, and optional I2S audio output GPIOs.
+- FM receiver mode, PCM sample rate, volume, and Korvo-1 speaker codec GPIOs.
 - LCD RGB timing and GPIO mapping.
 - LVGL draw buffer/task sizing.
 - I2C touch input. The default ESP32-S31-Korvo-1 LCD subboard setting uses SDA GPIO0, SCL GPIO1, and GT911 address 0x14. The firmware also probes FT5x06-compatible controllers; set SDA/SCL/INT/RST and axis transform options to match other LCD subboards.
@@ -38,6 +38,6 @@ The waterfall layout follows the ESP32-DIV spectrum screens: a live FFT overview
 
 The Waterfall page can now change the center frequency at runtime. The ESP32-side RTL-SDR task applies those requests to supported Fitipower FC0012/FC0013 and Rafael R820T/R820T2/R828D tuners, then continues streaming IQ data through the same FFT pipeline. Other tuner families still need their own driver path before they can tune on this target.
 
-The FM receiver follows the desktop `rtlsdr-display` demodulator structure: quadrature phase-difference FM detection, FIR audio low-pass filtering, decimation to PCM, DC blocking, and WFM deemphasis. Optional I2S output sends mono 16-bit PCM to an external DAC/amplifier when `RTL-SDR Waterfall -> FM Receiver -> Enable I2S audio output` is enabled and valid BCLK/WS/DOUT GPIOs are configured. I2S output is disabled by default so boards without an audio codec still build and run the FM spectrum/status page.
+The FM receiver follows the desktop `rtlsdr-display` demodulator structure: quadrature phase-difference FM detection, FIR audio low-pass filtering, decimation to PCM, DC blocking, and WFM deemphasis. FM audio output is enabled by default for the ESP32-S31-Korvo-1 onboard speaker path: ES8389 is controlled over I2C GPIO0/GPIO1, receives 16-bit stereo PCM over I2S SCLK GPIO3, LRCLK GPIO4, DOUT GPIO5, and drives the NS4150B speaker amplifier through PA enable GPIO7. The demodulator remains mono; the speaker backend duplicates samples to left and right channels.
 
 Some RGB LCD subboards also require controller initialization over the ESP32-S31-Korvo-1 3-wire LCD SPI pins before the RGB stream is visible. The RGB data/timing path is implemented; add the subboard's panel-init table if the backlight turns on but no image appears.

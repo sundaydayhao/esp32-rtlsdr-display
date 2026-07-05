@@ -150,8 +150,8 @@ static void close_freq_dialog(waterfall_display_t *display);
 #ifndef CONFIG_FM_RECEIVER_NFM_MODE
 #define CONFIG_FM_RECEIVER_NFM_MODE 0
 #endif
-#ifndef CONFIG_FM_RECEIVER_I2S_OUTPUT
-#define CONFIG_FM_RECEIVER_I2S_OUTPUT 0
+#ifndef CONFIG_FM_RECEIVER_AUDIO_OUTPUT
+#define CONFIG_FM_RECEIVER_AUDIO_OUTPUT 1
 #endif
 #ifndef CONFIG_FM_RECEIVER_AUDIO_RATE_HZ
 #define CONFIG_FM_RECEIVER_AUDIO_RATE_HZ 48000
@@ -680,7 +680,7 @@ static void refresh_metrics_locked(waterfall_display_t *display)
     if (!display->fm_audio_output_enabled) {
         snprintf(fm_audio_output, sizeof(fm_audio_output), "Off");
     } else {
-        snprintf(fm_audio_output, sizeof(fm_audio_output), "%s", display->fm_audio_output_ready ? "I2S ready" : "I2S failed");
+        snprintf(fm_audio_output, sizeof(fm_audio_output), "%s", display->fm_audio_output_ready ? "Speaker ready" : "Speaker failed");
     }
     snprintf(fm_audio_level, sizeof(fm_audio_level), "%u%%", (unsigned)display->fm_audio_level);
 
@@ -1897,7 +1897,7 @@ esp_err_t waterfall_display_create(const waterfall_display_config_t *config, wat
     display->center_hz = CONFIG_RTLSDR_CENTER_FREQ_HZ;
     display->sample_rate_hz = CONFIG_RTLSDR_SAMPLE_RATE;
     display->fm_audio_rate_hz = CONFIG_FM_RECEIVER_AUDIO_RATE_HZ;
-    display->fm_audio_output_enabled = CONFIG_FM_RECEIVER_I2S_OUTPUT;
+    display->fm_audio_output_enabled = CONFIG_FM_RECEIVER_AUDIO_OUTPUT;
     display->fm_audio_output_ready = false;
     snprintf(display->fm_mode, sizeof(display->fm_mode), "%s", CONFIG_FM_RECEIVER_NFM_MODE ? "NFM" : "WFM");
     strcpy(display->status, "WAITING FOR RTL2832U");

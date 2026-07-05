@@ -95,28 +95,64 @@ menu "RTL-SDR Waterfall"
             default 80
             range 0 150
 
-        config FM_RECEIVER_I2S_OUTPUT
-            bool "Enable I2S audio output"
-            default n
+        config FM_RECEIVER_AUDIO_OUTPUT
+            bool "Enable Korvo-1 speaker audio output"
+            default y
             help
-                Outputs mono 16-bit PCM through the ESP-IDF I2S standard-mode
-                driver. Keep disabled when no external I2S DAC or amplifier is
-                connected.
+                Sends FM mono PCM to the ESP32-S31-Korvo-1 onboard ES8389 codec
+                and NS4150B speaker amplifier.
 
-        config FM_RECEIVER_I2S_BCLK_GPIO
-            int "I2S BCLK GPIO"
-            depends on FM_RECEIVER_I2S_OUTPUT
+        config FM_RECEIVER_AUDIO_I2C_PORT
+            int "Audio codec I2C port"
+            depends on FM_RECEIVER_AUDIO_OUTPUT
+            default 0
+            range 0 1
+
+        config FM_RECEIVER_AUDIO_I2C_SDA_GPIO
+            int "Audio codec I2C SDA GPIO"
+            depends on FM_RECEIVER_AUDIO_OUTPUT
+            default 0
+
+        config FM_RECEIVER_AUDIO_I2C_SCL_GPIO
+            int "Audio codec I2C SCL GPIO"
+            depends on FM_RECEIVER_AUDIO_OUTPUT
+            default 1
+
+        config FM_RECEIVER_AUDIO_I2S_PORT
+            int "Audio I2S port"
+            depends on FM_RECEIVER_AUDIO_OUTPUT
+            default 1
+            range 0 2
+
+        config FM_RECEIVER_AUDIO_I2S_MCLK_GPIO
+            int "Audio I2S MCLK GPIO (-1 if unused)"
+            depends on FM_RECEIVER_AUDIO_OUTPUT
             default -1
 
-        config FM_RECEIVER_I2S_WS_GPIO
-            int "I2S WS/LRCLK GPIO"
-            depends on FM_RECEIVER_I2S_OUTPUT
-            default -1
+        config FM_RECEIVER_AUDIO_I2S_BCLK_GPIO
+            int "Audio I2S BCLK/SCLK GPIO"
+            depends on FM_RECEIVER_AUDIO_OUTPUT
+            default 3
 
-        config FM_RECEIVER_I2S_DOUT_GPIO
-            int "I2S DOUT GPIO"
-            depends on FM_RECEIVER_I2S_OUTPUT
-            default -1
+        config FM_RECEIVER_AUDIO_I2S_WS_GPIO
+            int "Audio I2S WS/LRCLK GPIO"
+            depends on FM_RECEIVER_AUDIO_OUTPUT
+            default 4
+
+        config FM_RECEIVER_AUDIO_I2S_DOUT_GPIO
+            int "Audio I2S DOUT GPIO"
+            depends on FM_RECEIVER_AUDIO_OUTPUT
+            default 5
+
+        config FM_RECEIVER_AUDIO_I2S_DIN_GPIO
+            int "Audio I2S DIN GPIO"
+            depends on FM_RECEIVER_AUDIO_OUTPUT
+            default 6
+
+        config FM_RECEIVER_AUDIO_PA_GPIO
+            int "Audio speaker PA enable GPIO"
+            depends on FM_RECEIVER_AUDIO_OUTPUT
+            default 7
     endmenu
 
     menu "LCD"

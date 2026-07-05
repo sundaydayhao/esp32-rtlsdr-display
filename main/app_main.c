@@ -18,8 +18,8 @@ static const char *TAG = "app";
 #ifndef CONFIG_FM_RECEIVER_NFM_MODE
 #define CONFIG_FM_RECEIVER_NFM_MODE 0
 #endif
-#ifndef CONFIG_FM_RECEIVER_I2S_OUTPUT
-#define CONFIG_FM_RECEIVER_I2S_OUTPUT 0
+#ifndef CONFIG_FM_RECEIVER_AUDIO_OUTPUT
+#define CONFIG_FM_RECEIVER_AUDIO_OUTPUT 1
 #endif
 #ifndef CONFIG_FM_RECEIVER_AUDIO_RATE_HZ
 #define CONFIG_FM_RECEIVER_AUDIO_RATE_HZ 48000
@@ -27,14 +27,35 @@ static const char *TAG = "app";
 #ifndef CONFIG_FM_RECEIVER_VOLUME_PERCENT
 #define CONFIG_FM_RECEIVER_VOLUME_PERCENT 80
 #endif
-#ifndef CONFIG_FM_RECEIVER_I2S_BCLK_GPIO
-#define CONFIG_FM_RECEIVER_I2S_BCLK_GPIO -1
+#ifndef CONFIG_FM_RECEIVER_AUDIO_I2C_PORT
+#define CONFIG_FM_RECEIVER_AUDIO_I2C_PORT 0
 #endif
-#ifndef CONFIG_FM_RECEIVER_I2S_WS_GPIO
-#define CONFIG_FM_RECEIVER_I2S_WS_GPIO -1
+#ifndef CONFIG_FM_RECEIVER_AUDIO_I2C_SDA_GPIO
+#define CONFIG_FM_RECEIVER_AUDIO_I2C_SDA_GPIO 0
 #endif
-#ifndef CONFIG_FM_RECEIVER_I2S_DOUT_GPIO
-#define CONFIG_FM_RECEIVER_I2S_DOUT_GPIO -1
+#ifndef CONFIG_FM_RECEIVER_AUDIO_I2C_SCL_GPIO
+#define CONFIG_FM_RECEIVER_AUDIO_I2C_SCL_GPIO 1
+#endif
+#ifndef CONFIG_FM_RECEIVER_AUDIO_I2S_PORT
+#define CONFIG_FM_RECEIVER_AUDIO_I2S_PORT 1
+#endif
+#ifndef CONFIG_FM_RECEIVER_AUDIO_I2S_MCLK_GPIO
+#define CONFIG_FM_RECEIVER_AUDIO_I2S_MCLK_GPIO -1
+#endif
+#ifndef CONFIG_FM_RECEIVER_AUDIO_I2S_BCLK_GPIO
+#define CONFIG_FM_RECEIVER_AUDIO_I2S_BCLK_GPIO 3
+#endif
+#ifndef CONFIG_FM_RECEIVER_AUDIO_I2S_WS_GPIO
+#define CONFIG_FM_RECEIVER_AUDIO_I2S_WS_GPIO 4
+#endif
+#ifndef CONFIG_FM_RECEIVER_AUDIO_I2S_DOUT_GPIO
+#define CONFIG_FM_RECEIVER_AUDIO_I2S_DOUT_GPIO 5
+#endif
+#ifndef CONFIG_FM_RECEIVER_AUDIO_I2S_DIN_GPIO
+#define CONFIG_FM_RECEIVER_AUDIO_I2S_DIN_GPIO 6
+#endif
+#ifndef CONFIG_FM_RECEIVER_AUDIO_PA_GPIO
+#define CONFIG_FM_RECEIVER_AUDIO_PA_GPIO 7
 #endif
 
 #define STARTUP_TEST_WATERFALL_DELAY_MS  6000
@@ -170,10 +191,18 @@ void app_main(void)
         .sample_rate_hz = CONFIG_RTLSDR_SAMPLE_RATE,
         .audio_rate_hz = CONFIG_FM_RECEIVER_AUDIO_RATE_HZ,
         .volume_percent = CONFIG_FM_RECEIVER_VOLUME_PERCENT,
-        .i2s_enabled = CONFIG_FM_RECEIVER_I2S_OUTPUT,
-        .i2s_bclk_gpio = CONFIG_FM_RECEIVER_I2S_BCLK_GPIO,
-        .i2s_ws_gpio = CONFIG_FM_RECEIVER_I2S_WS_GPIO,
-        .i2s_dout_gpio = CONFIG_FM_RECEIVER_I2S_DOUT_GPIO,
+        .audio_output = CONFIG_FM_RECEIVER_AUDIO_OUTPUT ?
+            FM_RECEIVER_AUDIO_OUTPUT_KORVO_SPEAKER : FM_RECEIVER_AUDIO_OUTPUT_NONE,
+        .audio_i2c_port = CONFIG_FM_RECEIVER_AUDIO_I2C_PORT,
+        .audio_i2c_sda_gpio = CONFIG_FM_RECEIVER_AUDIO_I2C_SDA_GPIO,
+        .audio_i2c_scl_gpio = CONFIG_FM_RECEIVER_AUDIO_I2C_SCL_GPIO,
+        .audio_i2s_port = CONFIG_FM_RECEIVER_AUDIO_I2S_PORT,
+        .audio_i2s_mclk_gpio = CONFIG_FM_RECEIVER_AUDIO_I2S_MCLK_GPIO,
+        .audio_i2s_bclk_gpio = CONFIG_FM_RECEIVER_AUDIO_I2S_BCLK_GPIO,
+        .audio_i2s_ws_gpio = CONFIG_FM_RECEIVER_AUDIO_I2S_WS_GPIO,
+        .audio_i2s_dout_gpio = CONFIG_FM_RECEIVER_AUDIO_I2S_DOUT_GPIO,
+        .audio_i2s_din_gpio = CONFIG_FM_RECEIVER_AUDIO_I2S_DIN_GPIO,
+        .audio_pa_gpio = CONFIG_FM_RECEIVER_AUDIO_PA_GPIO,
         .waveform_cb = fm_waveform_cb,
         .waveform_cb_ctx = &app,
     };
@@ -181,7 +210,7 @@ void app_main(void)
     waterfall_display_set_fm_info(app.display,
                                   fm_receiver_mode_name(fm_cfg.mode),
                                   fm_cfg.audio_rate_hz,
-                                  fm_cfg.i2s_enabled,
+                                  fm_cfg.audio_output != FM_RECEIVER_AUDIO_OUTPUT_NONE,
                                   false,
                                   0);
 
