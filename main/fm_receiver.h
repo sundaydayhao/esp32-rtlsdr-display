@@ -48,6 +48,9 @@ typedef struct {
     uint32_t audio_rate_hz;
     uint32_t audio_frames;
     uint32_t dropped_audio_frames;
+    uint32_t dropped_pcm_ring_frames;
+    uint32_t dropped_audio_write_frames;
+    int volume_percent;
     uint8_t audio_level;
     bool audio_output_enabled;
     bool audio_output_ready;
@@ -57,6 +60,9 @@ esp_err_t fm_receiver_create(const fm_receiver_config_t *config, fm_receiver_t *
 void fm_receiver_destroy(fm_receiver_t *fm);
 
 esp_err_t fm_receiver_push_iq(fm_receiver_t *fm, const uint8_t *iq, size_t len);
+void fm_receiver_set_audio_enabled(fm_receiver_t *fm, bool enabled);
+esp_err_t fm_receiver_set_volume(fm_receiver_t *fm, int volume_percent);
+int fm_receiver_get_volume(fm_receiver_t *fm);
 void fm_receiver_reset(fm_receiver_t *fm);
 void fm_receiver_get_status(fm_receiver_t *fm, fm_receiver_status_t *status);
 const char *fm_receiver_mode_name(fm_receiver_mode_t mode);

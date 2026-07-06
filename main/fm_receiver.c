@@ -20,10 +20,13 @@
 #define FM_WFM_TAP_COUNT           101
 #define FM_NFM_TAP_COUNT           81
 #define FM_MAX_TAP_COUNT           FM_WFM_TAP_COUNT
-#define FM_PCM_FRAME_SAMPLES       256
-#define FM_PCM_RING_BYTES          (FM_PCM_FRAME_SAMPLES * sizeof(int16_t) * 12)
+#define FM_PCM_FRAME_SAMPLES       512
+#define FM_PCM_RING_FRAME_COUNT    40
+#define FM_PCM_RING_BYTES          (FM_PCM_FRAME_SAMPLES * sizeof(int16_t) * FM_PCM_RING_FRAME_COUNT)
+#define FM_PCM_SEND_TIMEOUT_MS     12
+#define FM_AUDIO_PREBUFFER_FRAMES  6
 #define FM_WAVEFORM_SAMPLES        128
-#define FM_WAVEFORM_INTERVAL_MS    45
+#define FM_WAVEFORM_INTERVAL_MS    120
 
 typedef struct {
     fm_receiver_mode_t mode;
@@ -64,6 +67,9 @@ struct fm_receiver {
     RingbufHandle_t pcm_ring;
     TaskHandle_t audio_task;
     volatile bool audio_task_stop;
+    volatile bool audio_enabled;
+    volatile bool audio_prebuffering;
+    volatile uint32_t pcm_queued_frames;
     korvo_audio_output_t *audio_output;
 };
 
@@ -109,6 +115,26 @@ static int16_t clamp_pcm(float sample)
         sample = -1.0f;
     }
     return (int16_t)lrintf(sample * 32767.0f);
+}
+
+static float fast_atan2f_approx(float y, float x)
+{
+    const float one_quarter_pi = (float)M_PI * 0.25f;
+    const float three_quarter_pi = (float)M_PI * 0.75f;
+    float abs_y = fabsf(y) + 1.0e-12f;
+    float angle;
+    float r;
+
+    if (x < 0.0f) {
+        r = (x + abs_y) / (abs_y - x);
+        angle = three_quarter_pi;
+    } else {
+        r = (x - abs_y) / (x + abs_y);
+        angle = one_quarter_pi;
+    }
+
+    angle += (0.1963f * r * r - 0.9817f) * r;
+    return y < 0.0f ? -angle : angle;
 }
 
 static void build_low_pass_taps(fm_receiver_t *fm)
@@ -185,16 +211,23 @@ static void submit_pcm_frame(fm_receiver_t *fm)
         return;
     }
 
-    bool sent = fm->cfg.audio_output == FM_RECEIVER_AUDIO_OUTPUT_NONE;
-    if (fm->pcm_ring) {
+    bool sent = fm->cfg.audio_output == FM_RECEIVER_AUDIO_OUTPUT_NONE || !fm->audio_enabled;
+    if (fm->audio_enabled && fm->pcm_ring) {
         size_t bytes = fm->pcm_frame_used * sizeof(fm->pcm_frame[0]);
-        sent = xRingbufferSend(fm->pcm_ring, fm->pcm_frame, bytes, 0) == pdTRUE;
+        sent = xRingbufferSend(fm->pcm_ring,
+                               fm->pcm_frame,
+                               bytes,
+                               pdMS_TO_TICKS(FM_PCM_SEND_TIMEOUT_MS)) == pdTRUE;
+        if (sent) {
+            fm->pcm_queued_frames++;
+        }
     }
 
     portENTER_CRITICAL(&fm->status_lock);
     fm->status.audio_frames++;
     if (!sent) {
         fm->status.dropped_audio_frames++;
+        fm->status.dropped_pcm_ring_frames++;
     }
     portEXIT_CRITICAL(&fm->status_lock);
     fm->pcm_frame_used = 0;
@@ -214,7 +247,7 @@ static bool demod_sample(fm_receiver_t *fm, uint8_t raw_i, uint8_t raw_q, int16_
 
     const float real = in_phase * fm->previous_i + quadrature * fm->previous_q;
     const float imag = quadrature * fm->previous_i - in_phase * fm->previous_q;
-    const float demodulated = atan2f(imag, real);
+    const float demodulated = fast_atan2f_approx(imag, real);
     fm->previous_i = in_phase;
     fm->previous_q = quadrature;
 
@@ -296,13 +329,24 @@ static void audio_task(void *arg)
     ESP_LOGI(TAG, "Starting FM audio task");
 
     while (!fm->audio_task_stop) {
+        if (fm->audio_enabled && fm->audio_prebuffering) {
+            if (fm->pcm_queued_frames < FM_AUDIO_PREBUFFER_FRAMES) {
+                vTaskDelay(pdMS_TO_TICKS(2));
+                continue;
+            }
+            fm->audio_prebuffering = false;
+        }
+
         size_t item_size = 0;
         uint8_t *item = xRingbufferReceive(fm->pcm_ring, &item_size, pdMS_TO_TICKS(100));
         if (!item) {
             continue;
         }
+        if (fm->pcm_queued_frames > 0) {
+            fm->pcm_queued_frames--;
+        }
 
-        if (fm->audio_output) {
+        if (fm->audio_enabled && fm->audio_output) {
             size_t sample_count = item_size / sizeof(int16_t);
             size_t written = 0;
             esp_err_t ret = korvo_audio_output_write_mono(fm->audio_output,
@@ -313,6 +357,7 @@ static void audio_task(void *arg)
             if (ret != ESP_OK || written != sample_count) {
                 portENTER_CRITICAL(&fm->status_lock);
                 fm->status.dropped_audio_frames++;
+                fm->status.dropped_audio_write_frames++;
                 portEXIT_CRITICAL(&fm->status_lock);
             }
         }
@@ -356,7 +401,8 @@ esp_err_t fm_receiver_create(const fm_receiver_config_t *config, fm_receiver_t *
     fm->status.mode = fm->cfg.mode;
     fm->status.sample_rate_hz = fm->cfg.sample_rate_hz;
     fm->status.audio_rate_hz = fm->profile.audio_rate_hz;
-    fm->status.audio_output_enabled = fm->cfg.audio_output != FM_RECEIVER_AUDIO_OUTPUT_NONE;
+    fm->status.volume_percent = fm->cfg.volume_percent;
+    fm->status.audio_output_enabled = false;
     fm->waveform_decimation = (fm->profile.audio_rate_hz * FM_WAVEFORM_INTERVAL_MS) /
                               (1000U * FM_WAVEFORM_SAMPLES);
     if (fm->waveform_decimation < 1) {
@@ -387,11 +433,13 @@ esp_err_t fm_receiver_create(const fm_receiver_config_t *config, fm_receiver_t *
     }
 
     ESP_LOGI(TAG,
-             "FM receiver ready: %s, IQ %lu Hz, audio %lu Hz, decimation %lu, I2S %s",
+             "FM receiver ready: %s, IQ %lu Hz, audio %lu Hz, decimation %lu, PCM %u x %u, I2S %s",
              fm->profile.name,
              (unsigned long)fm->cfg.sample_rate_hz,
              (unsigned long)fm->profile.audio_rate_hz,
              (unsigned long)fm->decimation,
+             (unsigned)FM_PCM_FRAME_SAMPLES,
+             (unsigned)FM_PCM_RING_FRAME_COUNT,
              fm->status.audio_output_ready ? "ready" :
              (fm->cfg.audio_output != FM_RECEIVER_AUDIO_OUTPUT_NONE ? "failed" : "off"));
 
@@ -418,6 +466,74 @@ void fm_receiver_destroy(fm_receiver_t *fm)
     heap_caps_free(fm);
 }
 
+static void drain_pcm_ring(fm_receiver_t *fm)
+{
+    if (!fm->pcm_ring) {
+        return;
+    }
+
+    size_t item_size = 0;
+    uint8_t *item = NULL;
+    while ((item = xRingbufferReceive(fm->pcm_ring, &item_size, 0)) != NULL) {
+        vRingbufferReturnItem(fm->pcm_ring, item);
+    }
+}
+
+void fm_receiver_set_audio_enabled(fm_receiver_t *fm, bool enabled)
+{
+    if (!fm) {
+        return;
+    }
+
+    bool ready = fm->cfg.audio_output != FM_RECEIVER_AUDIO_OUTPUT_NONE && fm->status.audio_output_ready;
+    fm->audio_enabled = enabled && ready;
+    if (!fm->audio_enabled) {
+        drain_pcm_ring(fm);
+        fm->pcm_queued_frames = 0;
+    } else {
+        fm->audio_prebuffering = true;
+    }
+
+    portENTER_CRITICAL(&fm->status_lock);
+    fm->status.audio_output_enabled = fm->audio_enabled;
+    if (!fm->audio_enabled) {
+        fm->status.audio_level = 0;
+    }
+    portEXIT_CRITICAL(&fm->status_lock);
+    ESP_LOGI(TAG, "FM audio output %s", fm->audio_enabled ? "enabled" : "disabled");
+}
+
+esp_err_t fm_receiver_set_volume(fm_receiver_t *fm, int volume_percent)
+{
+    ESP_RETURN_ON_FALSE(fm, ESP_ERR_INVALID_ARG, TAG, "bad volume receiver");
+    if (volume_percent < 0) {
+        volume_percent = 0;
+    } else if (volume_percent > 100) {
+        volume_percent = 100;
+    }
+
+    fm->cfg.volume_percent = volume_percent;
+    if (fm->audio_output) {
+        ESP_RETURN_ON_ERROR(korvo_audio_output_set_volume(fm->audio_output, volume_percent),
+                            TAG,
+                            "set output volume");
+    }
+
+    portENTER_CRITICAL(&fm->status_lock);
+    fm->status.volume_percent = volume_percent;
+    portEXIT_CRITICAL(&fm->status_lock);
+    ESP_LOGI(TAG, "FM volume set to %d%%", volume_percent);
+    return ESP_OK;
+}
+
+int fm_receiver_get_volume(fm_receiver_t *fm)
+{
+    if (!fm) {
+        return 0;
+    }
+    return fm->cfg.volume_percent;
+}
+
 void fm_receiver_reset(fm_receiver_t *fm)
 {
     if (!fm) {
@@ -434,6 +550,9 @@ void fm_receiver_reset(fm_receiver_t *fm)
     fm->ring_index = 0;
     memset(fm->ring, 0, sizeof(fm->ring));
     fm->pcm_frame_used = 0;
+    drain_pcm_ring(fm);
+    fm->pcm_queued_frames = 0;
+    fm->audio_prebuffering = fm->audio_enabled;
     fm->waveform_used = 0;
     fm->waveform_phase = 0;
     fm->level_energy_accum = 0;

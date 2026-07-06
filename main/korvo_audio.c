@@ -3,18 +3,27 @@
 #include <string.h>
 #include "driver/i2c_master.h"
 #include "driver/i2s_common.h"
-#include "driver/i2s_std.h"
+#include "driver/i2s_tdm.h"
 #include "esp_check.h"
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "es8389_codec.h"
+#include "freertos/FreeRTOS.h"
 
 #define KORVO_AUDIO_CODEC_ADDR          ES8389_CODEC_DEFAULT_ADDR
 #define KORVO_AUDIO_I2C_FREQ_HZ         400000
-#define KORVO_AUDIO_STEREO_FRAME_COUNT  128
-#define KORVO_AUDIO_CHANNELS            2
+#define KORVO_AUDIO_STEREO_FRAME_COUNT  256
+#define KORVO_AUDIO_ACTIVE_CHANNELS     2
+#define KORVO_AUDIO_TDM_SLOTS           4
+#define KORVO_AUDIO_TDM_MASK            (I2S_TDM_SLOT0 | I2S_TDM_SLOT1)
+#define ES8389_REG_CLK_MANAGER_0C       0x0c
+#define ES8389_REG_ADC_SP_CTRL_20       0x20
+#define ES8389_REG_DAC_SP_CTRL_40       0x40
+#define ES8389_MASK_DAIFMT              (7 << 2)
+#define ES8389_DAIFMT_DSP_A             (1 << 3)
+#define ES8389_CLK_FMT_DSP_A            0x80
 
 struct korvo_audio_output {
     korvo_audio_output_config_t cfg;
@@ -26,10 +35,79 @@ struct korvo_audio_output {
     const audio_codec_gpio_if_t *gpio_if;
     const audio_codec_if_t *codec_if;
     esp_codec_dev_handle_t codec_dev;
-    int16_t stereo_frame[KORVO_AUDIO_STEREO_FRAME_COUNT * KORVO_AUDIO_CHANNELS];
+    int16_t tdm_frame[KORVO_AUDIO_STEREO_FRAME_COUNT * KORVO_AUDIO_ACTIVE_CHANNELS];
 };
 
 static const char *TAG = "korvo_audio";
+
+static i2s_tdm_slot_config_t make_tdm_slot_config(void)
+{
+    i2s_tdm_slot_config_t slot_cfg = I2S_TDM_PCM_SHORT_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT,
+                                                                           I2S_SLOT_MODE_STEREO,
+                                                                           KORVO_AUDIO_TDM_MASK);
+    slot_cfg.total_slot = KORVO_AUDIO_TDM_SLOTS;
+    return slot_cfg;
+}
+
+static esp_err_t codec_update_bits(korvo_audio_output_t *audio, int reg, int mask, int value)
+{
+    ESP_RETURN_ON_FALSE(audio->codec_if && audio->codec_if->get_reg && audio->codec_if->set_reg,
+                        ESP_ERR_INVALID_STATE,
+                        TAG,
+                        "codec register access unavailable");
+
+    int current = 0;
+    ESP_RETURN_ON_FALSE(audio->codec_if->get_reg(audio->codec_if, reg, &current) == ESP_CODEC_DEV_OK,
+                        ESP_FAIL,
+                        TAG,
+                        "read codec reg 0x%02x",
+                        reg);
+    int next = (current & ~mask) | (value & mask);
+    ESP_RETURN_ON_FALSE(audio->codec_if->set_reg(audio->codec_if, reg, next) == ESP_CODEC_DEV_OK,
+                        ESP_FAIL,
+                        TAG,
+                        "write codec reg 0x%02x",
+                        reg);
+    return ESP_OK;
+}
+
+static esp_err_t force_es8389_tdm_format(korvo_audio_output_t *audio)
+{
+    ESP_RETURN_ON_ERROR(codec_update_bits(audio,
+                                          ES8389_REG_ADC_SP_CTRL_20,
+                                          ES8389_MASK_DAIFMT,
+                                          ES8389_DAIFMT_DSP_A),
+                        TAG,
+                        "set ES8389 ADC DSP-A");
+    ESP_RETURN_ON_ERROR(codec_update_bits(audio,
+                                          ES8389_REG_DAC_SP_CTRL_40,
+                                          ES8389_MASK_DAIFMT,
+                                          ES8389_DAIFMT_DSP_A),
+                        TAG,
+                        "set ES8389 DAC DSP-A");
+    ESP_RETURN_ON_ERROR(codec_update_bits(audio,
+                                          ES8389_REG_CLK_MANAGER_0C,
+                                          0xe0,
+                                          ES8389_CLK_FMT_DSP_A),
+                        TAG,
+                        "set ES8389 TDM clock format");
+    ESP_LOGI(TAG, "ES8389 digital audio format forced to DSP-A/TDM");
+    return ESP_OK;
+}
+
+static esp_err_t force_i2s_tdm_slot_format(korvo_audio_output_t *audio)
+{
+    i2s_tdm_slot_config_t slot_cfg = make_tdm_slot_config();
+    esp_err_t ret = i2s_channel_disable(audio->i2s_tx);
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        return ret;
+    }
+    ESP_RETURN_ON_ERROR(i2s_channel_reconfig_tdm_slot(audio->i2s_tx, &slot_cfg),
+                        TAG,
+                        "reconfig i2s tdm slot");
+    ESP_RETURN_ON_ERROR(i2s_channel_enable(audio->i2s_tx), TAG, "enable i2s tx");
+    return ESP_OK;
+}
 
 static esp_err_t init_i2c(korvo_audio_output_t *audio)
 {
@@ -65,9 +143,9 @@ static esp_err_t init_i2s(korvo_audio_output_t *audio)
 
     ESP_RETURN_ON_ERROR(i2s_new_channel(&chan_cfg, &audio->i2s_tx, NULL), TAG, "new i2s tx");
 
-    i2s_std_config_t std_cfg = {
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(audio->cfg.sample_rate_hz),
-        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
+    i2s_tdm_config_t tdm_cfg = {
+        .clk_cfg = I2S_TDM_CLK_DEFAULT_CONFIG(audio->cfg.sample_rate_hz),
+        .slot_cfg = make_tdm_slot_config(),
         .gpio_cfg = {
             .mclk = (gpio_num_t)audio->cfg.i2s_mclk_gpio,
             .bclk = (gpio_num_t)audio->cfg.i2s_bclk_gpio,
@@ -82,7 +160,7 @@ static esp_err_t init_i2s(korvo_audio_output_t *audio)
         },
     };
 
-    ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(audio->i2s_tx, &std_cfg), TAG, "init i2s std");
+    ESP_RETURN_ON_ERROR(i2s_channel_init_tdm_mode(audio->i2s_tx, &tdm_cfg), TAG, "init i2s tdm");
     ESP_RETURN_ON_ERROR(i2s_channel_enable(audio->i2s_tx), TAG, "enable i2s tx");
     return ESP_OK;
 }
@@ -135,8 +213,8 @@ static esp_err_t init_codec(korvo_audio_output_t *audio)
 
     esp_codec_dev_sample_info_t fs = {
         .bits_per_sample = I2S_DATA_BIT_WIDTH_16BIT,
-        .channel = KORVO_AUDIO_CHANNELS,
-        .channel_mask = 0x03,
+        .channel = KORVO_AUDIO_TDM_SLOTS,
+        .channel_mask = KORVO_AUDIO_TDM_MASK,
         .sample_rate = audio->cfg.sample_rate_hz,
         .mclk_multiple = I2S_MCLK_MULTIPLE_256,
     };
@@ -144,6 +222,8 @@ static esp_err_t init_codec(korvo_audio_output_t *audio)
                         ESP_FAIL,
                         TAG,
                         "open codec");
+    ESP_RETURN_ON_ERROR(force_i2s_tdm_slot_format(audio), TAG, "force i2s tdm slot format");
+    ESP_RETURN_ON_ERROR(force_es8389_tdm_format(audio), TAG, "force es8389 tdm format");
 
     int volume = audio->cfg.volume_percent;
     if (volume < 0) {
@@ -186,10 +266,12 @@ esp_err_t korvo_audio_output_create(const korvo_audio_output_config_t *config,
     }
 
     ESP_LOGI(TAG,
-             "Korvo speaker ready: ES8389 0x%02x, %lu Hz, I2S%d BCLK=%d WS=%d DOUT=%d PA=%d",
+             "Korvo speaker ready: ES8389 0x%02x, %lu Hz, I2S%d TDM%d mask=0x%x BCLK=%d WS=%d DOUT=%d PA=%d",
              KORVO_AUDIO_CODEC_ADDR,
              (unsigned long)audio->cfg.sample_rate_hz,
              audio->cfg.i2s_port,
+             KORVO_AUDIO_TDM_SLOTS,
+             (unsigned)KORVO_AUDIO_TDM_MASK,
              audio->cfg.i2s_bclk_gpio,
              audio->cfg.i2s_ws_gpio,
              audio->cfg.i2s_dout_gpio,
@@ -221,6 +303,23 @@ void korvo_audio_output_destroy(korvo_audio_output_t *audio)
     heap_caps_free(audio);
 }
 
+esp_err_t korvo_audio_output_set_volume(korvo_audio_output_t *audio, int volume_percent)
+{
+    ESP_RETURN_ON_FALSE(audio && audio->codec_dev, ESP_ERR_INVALID_ARG, TAG, "bad volume args");
+    if (volume_percent < 0) {
+        volume_percent = 0;
+    } else if (volume_percent > 100) {
+        volume_percent = 100;
+    }
+
+    audio->cfg.volume_percent = volume_percent;
+    ESP_RETURN_ON_FALSE(esp_codec_dev_set_out_vol(audio->codec_dev, volume_percent) == ESP_CODEC_DEV_OK,
+                        ESP_FAIL,
+                        TAG,
+                        "set codec volume");
+    return ESP_OK;
+}
+
 esp_err_t korvo_audio_output_write_mono(korvo_audio_output_t *audio,
                                         const int16_t *samples,
                                         size_t sample_count,
@@ -237,17 +336,29 @@ esp_err_t korvo_audio_output_write_mono(korvo_audio_output_t *audio,
         }
         for (size_t i = 0; i < n; i++) {
             int16_t sample = samples[done + i];
-            audio->stereo_frame[(i * 2)] = sample;
-            audio->stereo_frame[(i * 2) + 1] = sample;
+            audio->tdm_frame[(i * KORVO_AUDIO_ACTIVE_CHANNELS)] = sample;
+            audio->tdm_frame[(i * KORVO_AUDIO_ACTIVE_CHANNELS) + 1] = sample;
         }
 
-        int bytes = (int)(n * KORVO_AUDIO_CHANNELS * sizeof(audio->stereo_frame[0]));
-        int ret = esp_codec_dev_write(audio->codec_dev, audio->stereo_frame, bytes);
-        if (ret != ESP_CODEC_DEV_OK) {
+        size_t bytes = n * KORVO_AUDIO_ACTIVE_CHANNELS * sizeof(audio->tdm_frame[0]);
+        size_t bytes_written = 0;
+        esp_err_t ret = i2s_channel_write(audio->i2s_tx,
+                                          audio->tdm_frame,
+                                          bytes,
+                                          &bytes_written,
+                                          pdMS_TO_TICKS(timeout_ms));
+        if (ret != ESP_OK) {
+            if (samples_written) {
+                *samples_written = done + bytes_written / (KORVO_AUDIO_ACTIVE_CHANNELS * sizeof(audio->tdm_frame[0]));
+            }
+            return ret;
+        }
+        if (bytes_written != bytes) {
+            done += bytes_written / (KORVO_AUDIO_ACTIVE_CHANNELS * sizeof(audio->tdm_frame[0]));
             if (samples_written) {
                 *samples_written = done;
             }
-            return ESP_FAIL;
+            return ESP_ERR_TIMEOUT;
         }
         done += n;
 

@@ -19,19 +19,22 @@ menu "RTL-SDR Waterfall"
 
         config RTLSDR_SAMPLE_RATE
             int "Sample rate in samples per second"
-            default 1024000
+            default 288000
             range 225001 2400000
             help
-                RTL2832U complex sample rate. Start low during bring-up.
+                RTL2832U complex sample rate. Use an integer multiple of the
+                FM audio rate for clean WFM audio decimation; 288 ksps is
+                6 x 48 kHz and leaves more WFM channel margin than 240 ksps
+                while keeping ESP-side FM demodulation real-time.
 
         config RTLSDR_BULK_TRANSFER_SIZE
             int "USB bulk transfer size in bytes"
-            default 16384
+            default 4096
             range 4096 65536
 
         config RTLSDR_NUM_TRANSFERS
             int "Queued USB bulk transfers"
-            default 4
+            default 8
             range 2 8
 
         config RTLSDR_TUNER_GAIN_TENTHS_DB
@@ -92,8 +95,8 @@ menu "RTL-SDR Waterfall"
 
         config FM_RECEIVER_VOLUME_PERCENT
             int "FM audio volume percent"
-            default 80
-            range 0 150
+            default 35
+            range 0 100
 
         config FM_RECEIVER_AUDIO_OUTPUT
             bool "Enable Korvo-1 speaker audio output"

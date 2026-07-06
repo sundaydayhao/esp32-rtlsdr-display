@@ -19,6 +19,9 @@
 #define CTRL_TIMEOUT_MS           1000
 #define CTRL_EVENT_POLL_MS        10
 #define CTRL_DRAIN_POLLS          4
+#define CTRL_STALL_RECOVERY_MS    25
+#define TUNER_PROBE_ATTEMPTS      3
+#define TUNER_PROBE_RETRY_MS      80
 #define CLIENT_EVENT_MSGS         8
 #define DEV_MAX_COUNT             128
 
@@ -146,7 +149,9 @@ struct rtlsdr {
     volatile bool streaming;
     portMUX_TYPE tune_lock;
     volatile bool tune_pending;
+    volatile bool sample_rate_pending;
     uint32_t pending_center_freq_hz;
+    uint32_t pending_sample_rate_hz;
     uint8_t new_dev_addr;
     bool new_dev_pending;
     bool gone;
@@ -171,6 +176,7 @@ struct rtlsdr {
 static const char *TAG = "rtlsdr";
 
 static esp_err_t rtlsdr_configure_r82xx_if(rtlsdr_t *dev);
+static esp_err_t rtlsdr_reset_buffer(rtlsdr_t *dev);
 
 static bool is_rtlsdr_vid_pid(uint16_t vid, uint16_t pid)
 {
@@ -247,6 +253,13 @@ static esp_err_t ctrl_transfer(rtlsdr_t *dev,
     }
     if (ret == ESP_OK && transfer->status != USB_TRANSFER_STATUS_COMPLETED) {
         ESP_LOGW(TAG, "control transfer status %d", transfer->status);
+        if (transfer->status == USB_TRANSFER_STATUS_STALL) {
+            esp_err_t clear_ret = usb_host_endpoint_clear(dev->dev_hdl, 0);
+            if (clear_ret != ESP_OK) {
+                ESP_LOGD(TAG, "clear control endpoint stall: %s", esp_err_to_name(clear_ret));
+            }
+            vTaskDelay(pdMS_TO_TICKS(CTRL_STALL_RECOVERY_MS));
+        }
         ret = ESP_FAIL;
     }
     if (ret == ESP_OK && (bm_request_type & USB_BM_REQUEST_TYPE_DIR_IN) && len && data) {
@@ -1182,22 +1195,31 @@ static esp_err_t r82xx_set_freq(rtlsdr_t *dev, uint32_t center_freq_hz)
 
 static esp_err_t rtlsdr_probe_tuner(rtlsdr_t *dev)
 {
-    esp_err_t ret = fitipower_probe_tuner(dev);
-    if (ret == ESP_OK) {
-        return ESP_OK;
-    }
-    if (ret != ESP_ERR_NOT_FOUND) {
-        vTaskDelay(pdMS_TO_TICKS(30));
-    }
+    esp_err_t last_ret = ESP_ERR_NOT_FOUND;
+    for (int attempt = 0; attempt < TUNER_PROBE_ATTEMPTS; attempt++) {
+        esp_err_t ret = r82xx_probe_tuner(dev);
+        if (ret == ESP_OK) {
+            return ESP_OK;
+        }
+        last_ret = ret;
+        if (ret != ESP_ERR_NOT_FOUND) {
+            vTaskDelay(pdMS_TO_TICKS(TUNER_PROBE_RETRY_MS));
+            continue;
+        }
 
-    ret = r82xx_probe_tuner(dev);
-    if (ret == ESP_OK) {
-        return ESP_OK;
+        ret = fitipower_probe_tuner(dev);
+        if (ret == ESP_OK) {
+            return ESP_OK;
+        }
+        last_ret = ret;
+        if (attempt + 1 < TUNER_PROBE_ATTEMPTS) {
+            vTaskDelay(pdMS_TO_TICKS(TUNER_PROBE_RETRY_MS));
+        }
     }
 
     dev->tuner_type = RTL_TUNER_NONE;
     dev->tuner_chip = R82XX_CHIP_NONE;
-    return ESP_ERR_NOT_SUPPORTED;
+    return last_ret == ESP_ERR_NOT_FOUND ? ESP_ERR_NOT_SUPPORTED : last_ret;
 }
 
 static esp_err_t rtlsdr_configure_tuner_if(rtlsdr_t *dev)
@@ -1288,6 +1310,19 @@ static bool rtlsdr_take_pending_tune(rtlsdr_t *dev, uint32_t *freq_hz)
     return pending;
 }
 
+static bool rtlsdr_take_pending_sample_rate(rtlsdr_t *dev, uint32_t *sample_rate_hz)
+{
+    bool pending;
+    portENTER_CRITICAL(&dev->tune_lock);
+    pending = dev->sample_rate_pending;
+    if (pending) {
+        *sample_rate_hz = dev->pending_sample_rate_hz;
+        dev->sample_rate_pending = false;
+    }
+    portEXIT_CRITICAL(&dev->tune_lock);
+    return pending;
+}
+
 static esp_err_t rtlsdr_set_fir(rtlsdr_t *dev)
 {
     uint8_t fir[20];
@@ -1330,6 +1365,20 @@ static esp_err_t rtlsdr_set_sample_rate(rtlsdr_t *dev, uint32_t sample_rate)
     ESP_RETURN_ON_ERROR(rtlsdr_demod_write_reg(dev, 1, 0xa1, (uint16_t)(ratio & 0xffff), 2), TAG, "sample ratio low");
     ESP_RETURN_ON_ERROR(rtlsdr_demod_write_reg(dev, 1, 0x01, 0x14, 1), TAG, "demod reset");
     ESP_RETURN_ON_ERROR(rtlsdr_demod_write_reg(dev, 1, 0x01, 0x10, 1), TAG, "demod run");
+    return ESP_OK;
+}
+
+static esp_err_t rtlsdr_apply_sample_rate(rtlsdr_t *dev, uint32_t sample_rate_hz)
+{
+    if (!dev->dev_hdl) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    ESP_RETURN_ON_ERROR(rtlsdr_set_sample_rate(dev, sample_rate_hz), TAG, "runtime sample rate");
+    dev->cfg.sample_rate_hz = sample_rate_hz;
+    if (dev->streaming) {
+        (void)rtlsdr_reset_buffer(dev);
+    }
+    ESP_LOGI(TAG, "RTL-SDR sample rate set to %lu Hz", (unsigned long)sample_rate_hz);
     return ESP_OK;
 }
 
@@ -1550,6 +1599,7 @@ static esp_err_t open_if_rtlsdr(rtlsdr_t *dev, uint8_t addr)
         ESP_LOGW(TAG, "RTL2832U baseband init failed: %s", esp_err_to_name(ret));
         return ret;
     }
+    vTaskDelay(pdMS_TO_TICKS(120));
 
     ret = rtlsdr_probe_tuner(dev);
     if (ret != ESP_OK) {
@@ -1644,6 +1694,18 @@ static void rtlsdr_task(void *arg)
             set_status(dev, "RTLSDR DISCONNECTED");
         }
 
+        uint32_t sample_rate_hz = 0;
+        if (rtlsdr_take_pending_sample_rate(dev, &sample_rate_hz)) {
+            if (dev->dev_hdl) {
+                ret = rtlsdr_apply_sample_rate(dev, sample_rate_hz);
+                if (ret != ESP_OK) {
+                    set_status(dev, "RTLSDR SAMPLE RATE FAILED");
+                }
+            } else {
+                dev->cfg.sample_rate_hz = sample_rate_hz;
+            }
+        }
+
         uint32_t tune_hz = 0;
         if (rtlsdr_take_pending_tune(dev, &tune_hz)) {
             if (dev->dev_hdl) {
@@ -1689,6 +1751,7 @@ esp_err_t rtlsdr_start(rtlsdr_t **out_dev,
     dev->cb_ctx = cb_ctx;
     dev->tune_lock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
     dev->pending_center_freq_hz = config->center_freq_hz;
+    dev->pending_sample_rate_hz = config->sample_rate_hz;
     dev->done_sem = xSemaphoreCreateBinary();
     if (!dev->done_sem) {
         free(dev);
@@ -1729,6 +1792,23 @@ esp_err_t rtlsdr_set_center_freq_hz(rtlsdr_t *dev, uint32_t center_freq_hz)
     portENTER_CRITICAL(&dev->tune_lock);
     dev->pending_center_freq_hz = center_freq_hz;
     dev->tune_pending = true;
+    portEXIT_CRITICAL(&dev->tune_lock);
+
+    if (dev->client) {
+        usb_host_client_unblock(dev->client);
+    }
+    return ESP_OK;
+}
+
+esp_err_t rtlsdr_set_sample_rate_hz(rtlsdr_t *dev, uint32_t sample_rate_hz)
+{
+    if (!dev || sample_rate_hz == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    portENTER_CRITICAL(&dev->tune_lock);
+    dev->pending_sample_rate_hz = sample_rate_hz;
+    dev->sample_rate_pending = true;
     portEXIT_CRITICAL(&dev->tune_lock);
 
     if (dev->client) {

@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "app_main.c"
+        "adsb.c"
         "display.c"
         "dsp.c"
         "fm_receiver.c"
@@ -17,5 +18,6 @@ idf_component_register(
         esp_ringbuf
         esp_timer
         lvgl
+        spiffs
         usb
 )

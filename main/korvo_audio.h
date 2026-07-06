@@ -28,6 +28,7 @@ typedef struct {
 esp_err_t korvo_audio_output_create(const korvo_audio_output_config_t *config,
                                     korvo_audio_output_t **out);
 void korvo_audio_output_destroy(korvo_audio_output_t *audio);
+esp_err_t korvo_audio_output_set_volume(korvo_audio_output_t *audio, int volume_percent);
 esp_err_t korvo_audio_output_write_mono(korvo_audio_output_t *audio,
                                         const int16_t *samples,
                                         size_t sample_count,

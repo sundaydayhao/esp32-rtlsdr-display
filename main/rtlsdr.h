@@ -30,6 +30,7 @@ esp_err_t rtlsdr_start(rtlsdr_t **out_dev,
 void rtlsdr_stop(rtlsdr_t *dev);
 
 esp_err_t rtlsdr_set_center_freq_hz(rtlsdr_t *dev, uint32_t center_freq_hz);
+esp_err_t rtlsdr_set_sample_rate_hz(rtlsdr_t *dev, uint32_t sample_rate_hz);
 uint32_t rtlsdr_get_center_freq_hz(const rtlsdr_t *dev);
 uint32_t rtlsdr_get_sample_rate_hz(const rtlsdr_t *dev);
 

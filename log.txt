@@ -1,0 +1,375 @@
+I (26) boot: ESP-IDF e9da155a 2nd stage bootloader
+I (26) boot: compile time Jul  4 2026 07:48:44
+I (26) boot: Multicore bootloader
+I (28) boot: chip revision: v0.0
+I (29) boot: efuse block revision: v0.0
+I (33) boot.esp32s31: SPI Speed      : 80MHz
+I (37) boot.esp32s31: SPI Mode       : DIO
+I (41) boot.esp32s31: SPI Flash Size : 2MB
+I (45) boot: Enabling RNG early entropy source...
+I (49) boot: Partition Table:
+I (52) boot: ## Label            Usage          Type ST Offset   Length
+I (58) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (64) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (71) boot:  2 factory          factory app      00 00 00010000 00100000
+I (79) boot: End of partition table
+I (81) esp_image: segment 0: paddr=00010020 vaddr=40098020 size=1c84ch (116812) map
+I (109) esp_image: segment 1: paddr=0002c874 vaddr=2f000000 size=037a4h ( 14244) load
+I (113) esp_image: segment 2: paddr=00030020 vaddr=40000020 size=973a0h (619424) map
+I (216) esp_image: segment 3: paddr=000c73c8 vaddr=2f0037a4 size=0bda8h ( 48552) load
+I (227) esp_image: segment 4: paddr=000d3178 vaddr=2f00f580 size=03864h ( 14436) load
+I (235) boot: Loaded app from partition at offset 0x10000
+I (235) boot: Disabling RNG early entropy source...
+I (246) oct_psram: vendor id    : 0x1a (UNKNOWN)
+I (247) oct_psram: Latency      : 0x01 (Fixed)
+I (247) oct_psram: DriveStr.    : 0x00 (25 Ohm)
+I (248) oct_psram: dev id       : 0x00 (generation 1)
+I (253) oct_psram: density      : 0x05 (128 Mbit)
+I (257) oct_psram: good-die     : 0x06 (Pass)
+I (261) oct_psram: SRF          : 0x02 (Slow Refresh)
+I (266) oct_psram: BurstType    : 0x00 ( Wrap)
+I (270) oct_psram: BurstLen     : 0x03 (2048 Byte)
+I (275) oct_psram: BitMode      : 0x00 (X8 Mode)
+I (279) oct_psram: Readlatency  : 0x04 (14 cycles@Fixed)
+I (284) oct_psram: DriveStrength: 0x00 (1/1)
+I (288) MSPI Timing: Enter psram timing tuning
+I (444) esp_psram: Found 16MB PSRAM device
+I (445) esp_psram: Speed: 200MHz
+I (446) cpu_start: Multicore app
+I (759) esp_psram: SPI SRAM memory test OK
+I (768) cpu_start: GPIO 59 and 58 are used as console UART I/O pins
+I (768) cpu_start: Pro cpu start user code
+I (768) cpu_start: cpu freq: 240000000 Hz
+I (770) app_init: Application information:
+I (774) app_init: Project name:     esp32_rtlsdr_display
+I (779) app_init: App version:      e8c70ee-dirty
+I (783) app_init: Compile time:     Jul  6 2026 15:42:20
+I (788) app_init: ELF file SHA256:  ba72a19ea...
+I (793) app_init: ESP-IDF:          e9da155a
+I (797) efuse_init: Min chip rev:     v0.0
+I (801) efuse_init: Max chip rev:     v0.99
+I (805) efuse_init: Chip rev:         v0.0
+I (808) heap_init: Initializing. RAM available for dynamic allocation:
+I (815) heap_init: At 2F024B60 len 00056450 (345 KiB): RAM
+I (820) heap_init: At 2F07AFB0 len 000041C0 (16 KiB): RAM
+I (825) heap_init: At 2E000000 len 00007FE8 (31 KiB): RTCRAM
+I (831) esp_psram: Adding pool of 16384K of PSRAM memory to heap allocator
+I (838) spi_flash: detected chip: generic
+I (841) spi_flash: flash io: dio
+W (844) spi_flash: Detected size(16384k) larger than the size in the binary image header(2048k). Using the size in the binary image header.
+I (856) sleep_gpio: Configure to isolate all GPIO pins in sleep state
+I (862) sleep_gpio: Enable automatic switching of GPIO sleep configuration
+I (869) coexist: coex firmware version: 789e098
+I (873) coexist: coexist rom version cdcf52b
+I (878) main_task: Started on CPU0
+I (881) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations
+I (889) main_task: Calling app_main()
+I (970) display: Touch init: port=0 sda=0 scl=1 freq=400000 gt911=0x14 ft5x06=0x38 int=-1 rst=-1
+I (989) display: Touch I2C scan: 0x10 0x14
+I (990) display: Touch probe matched GT911 address 0x14
+I (990) display: Touch input ready: GT911 1158
+I (991) display: Starting LVGL task
+I (1156) app: FFT line decimation 28: 562 raw lines/s -> about 20 display lines/s
+I (1159) display: GT touch status=0x00
+I (1178) korvo_audio: Using existing I2C bus 0 for ES8389
+I (1193) display: GT touch status=0x00
+I (1208) ES8389: Work in Slave mode
+I (1212) ES8389: Set internal reference signal
+I (1213) I2S_IF: No paired data, current mode: playback
+I (1214) I2S_IF: TDM: TX, data_bit: 16, slot_bit: 16, ws_width: 32, total_slot: 4, slot_mask: 0x3
+I (1219) I2S_IF: TDM: TX, sample_rate_hz: 48000, mclk_multiple: 256, clk_src: 16
+I (1227) display: GT touch status=0x00
+I (1250) Adev_Codec: Open codec device OK
+I (1253) korvo_audio: ES8389 digital audio format forced to DSP-A/TDM
+I (1255) korvo_audio: Korvo speaker ready: ES8389 0x20, 48000 Hz, I2S1 TDM4 mask=0x3 BCLK=3 WS=4 DOUT=5 PA=7
+I (1259) fm_receiver: FM receiver ready: WFM, IQ 288000 Hz, audio 48000 Hz, decimation 6, PCM 512 x 40, I2S ready
+I (1259) fm_receiver: Starting FM audio task
+I (1269) fm_receiver: FM audio output disabled
+I (1277) display: GT touch status=0x00
+I (1311) usb_host: USB host installed
+I (1312) usb_host: Cycling USB root port power
+I (1312) display: GT touch status=0x00
+I (1321) app: FM stream: iq=0/s iq_drop=0/s pcm=0/s drop=0/s ring_drop=0/s write_drop=0/s level=0
+I (1347) display: GT touch status=0x00
+I (1381) display: GT touch status=0x00
+I (1415) display: GT touch status=0x00
+I (1462) usb_host: Powering USB root port
+I (2321) app: FM stream: iq=0/s iq_drop=0/s pcm=0/s drop=0/s ring_drop=0/s write_drop=0/s level=0
+I (2362) rtlsdr: WAITING FOR RTL2832U
+I (3036) rtlsdr: USB device 0bda:2838
+I (3036) rtlsdr: RTL-SDR bulk IN endpoint 0x81 MPS 512 interface 0 alt 0
+I (3037) rtlsdr: RTL2832U CONTROL INIT
+I (3260) rtlsdr: sample rate 288000 Hz, ratio 0x09000000
+E (3294) USBH: Dev 1 EP 0 STALL
+W (3294) rtlsdr: control transfer status 4
+E (3314) rtlsdr: fitipower_read_reg(489): fitipower read addr
+W (3319) rtlsdr: Fitipower probe addr 0xc6 failed: ESP_FAIL
+I (3321) app: FM stream: iq=0/s iq_drop=0/s pcm=0/s drop=0/s ring_drop=0/s write_drop=0/s level=0
+I (3364) rtlsdr: Found Rafael R820T/R820T2 tuner at 0x34
+I (3803) rtlsdr: RTL-SDR tuned to 100000000 Hz (R82xx)
+I (3803) rtlsdr: STREAMING RTLSDR IQ
+I (4322) app: FM stream: iq=73/s iq_drop=0/s pcm=0/s drop=0/s ring_drop=0/s write_drop=0/s level=0
+I (5322) app: FM stream: iq=141/s iq_drop=0/s pcm=0/s drop=0/s ring_drop=0/s write_drop=0/s level=0
+I (6322) app: FM stream: iq=141/s iq_drop=0/s pcm=0/s drop=0/s ring_drop=0/s write_drop=0/s level=0
+I (7322) app: FM stream: iq=140/s iq_drop=0/s pcm=0/s drop=0/s ring_drop=0/s write_drop=0/s level=0
+I (7559) display: GT touch status=0x81
+I (7560) display: GT raw touch status=0x81 raw=400,124 mapped=400,124
+I (7560) display: Touch press 400,124
+I (7594) display: GT touch status=0x81
+I (7595) display: GT raw touch status=0x81 raw=400,124 mapped=400,124
+I (7628) display: GT touch status=0x80
+I (7628) display: Touch release
+I (7629) display: Tile clicked: FM Receiver
+I (7668) display: FM Receiver center frequency applied: 100.000 MHz
+I (7668) fm_receiver: FM audio output enabled
+I (7704) rtlsdr: RTL-SDR tuned to 100000000 Hz (R82xx)
+I (7705) rtlsdr: TUNED 100.000 MHz
+I (7828) display: GT touch status=0x80
+I (7912) display: GT touch status=0x80
+I (8322) app: FM stream: iq=122/s iq_drop=11/s pcm=52/s drop=0/s ring_drop=0/s write_drop=0/s level=30
+I (9334) app: FM stream: iq=126/s iq_drop=17/s pcm=82/s drop=34/s ring_drop=34/s write_drop=0/s level=28
+I (9502) display: GT touch status=0x81
+I (9504) display: GT raw touch status=0x81 raw=605,141 mapped=605,141
+I (9504) display: Touch press 605,141
+I (9536) display: GT touch status=0x81
+I (9537) display: GT raw touch status=0x81 raw=605,141 mapped=605,141
+I (9582) display: GT touch status=0x81
+I (9583) display: GT raw touch status=0x81 raw=605,141 mapped=605,141
+I (9615) display: GT touch status=0x80
+I (9616) display: Touch release
+I (9936) display: GT touch status=0x80
+I (10026) display: GT touch status=0x80
+I (10624) app: FM stream: iq=149/s iq_drop=32/s pcm=79/s drop=29/s ring_drop=29/s write_drop=0/s level=31
+I (11624) app: FM stream: iq=118/s iq_drop=23/s pcm=95/s drop=45/s ring_drop=45/s write_drop=0/s level=31
+I (11689) display: GT touch status=0x81
+I (11690) display: GT raw touch status=0x81 raw=508,228 mapped=508,228
+I (11690) display: Touch press 508,228
+I (11724) display: GT touch status=0x81
+I (11725) display: GT raw touch status=0x81 raw=508,228 mapped=508,228
+I (11838) display: GT touch status=0x81
+I (11839) display: GT raw touch status=0x81 raw=508,228 mapped=508,228
+I (11952) display: GT touch status=0x80
+I (11953) display: Touch release
+I (12065) display: GT touch status=0x80
+I (12111) display: GT touch status=0x81
+I (12112) display: GT raw touch status=0x81 raw=514,222 mapped=514,222
+I (12113) display: Touch press 514,222
+I (12224) display: GT touch status=0x80
+I (12225) display: Touch release
+I (12338) display: GT touch status=0x81
+I (12339) display: GT raw touch status=0x81 raw=516,216 mapped=516,216
+I (12339) display: Touch press 516,216
+I (12372) display: GT touch status=0x80
+I (12373) display: Touch release
+I (12481) display: GT touch status=0x81
+I (12482) display: GT raw touch status=0x81 raw=517,220 mapped=517,220
+I (12483) display: Touch press 517,220
+I (12516) display: GT touch status=0x80
+I (12517) display: Touch release
+I (12563) display: GT touch status=0x80
+I (12675) display: GT touch status=0x81
+I (12676) display: GT raw touch status=0x81 raw=517,215 mapped=517,215
+I (12677) display: Touch press 517,215
+I (12788) display: GT touch status=0x80
+I (12788) display: Touch release
+I (12898) app: FM stream: iq=157/s iq_drop=22/s pcm=85/s drop=35/s ring_drop=35/s write_drop=0/s level=34
+I (12901) display: GT touch status=0x80
+I (12984) display: GT touch status=0x80
+I (13504) display: GT touch status=0x81
+I (13504) display: GT raw touch status=0x81 raw=291,276 mapped=291,276
+I (13505) display: Touch press 291,276
+I (13615) display: GT touch status=0x81
+I (13616) display: GT raw touch status=0x81 raw=291,276 mapped=291,276
+I (13707) display: GT touch status=0x81
+I (13708) display: GT raw touch status=0x81 raw=298,230 mapped=298,230
+I (13742) display: GT touch status=0x81
+I (13743) display: GT raw touch status=0x81 raw=303,206 mapped=303,206
+I (13776) display: GT touch status=0x81
+I (13777) display: GT raw touch status=0x81 raw=304,197 mapped=304,197
+I (13893) display: GT touch status=0x81
+I (13894) display: GT raw touch status=0x81 raw=306,187 mapped=306,187
+I (13988) app: FM stream: iq=137/s iq_drop=16/s pcm=112/s drop=42/s ring_drop=42/s write_drop=0/s level=35
+I (13992) display: GT touch status=0x81
+I (13993) display: GT raw touch status=0x81 raw=309,149 mapped=309,149
+I (14083) display: GT touch status=0x81
+I (14084) display: GT raw touch status=0x81 raw=310,132 mapped=310,132
+I (14177) display: GT touch status=0x81
+I (14178) display: GT raw touch status=0x81 raw=312,125 mapped=312,125
+I (14212) display: GT touch status=0x81
+I (14213) display: GT raw touch status=0x81 raw=312,123 mapped=312,123
+I (14246) display: GT touch status=0x81
+I (14247) display: GT raw touch status=0x81 raw=312,123 mapped=312,123
+I (14280) display: GT touch status=0x81
+I (14281) display: GT raw touch status=0x81 raw=312,123 mapped=312,123
+I (14389) display: GT touch status=0x81
+I (14390) display: GT raw touch status=0x81 raw=312,123 mapped=312,123
+I (14497) display: GT touch status=0x81
+I (14498) display: GT raw touch status=0x81 raw=312,121 mapped=312,121
+I (14592) display: GT touch status=0x81
+I (14593) display: GT raw touch status=0x81 raw=314,115 mapped=314,115
+I (14625) display: GT touch status=0x81
+I (14626) display: GT raw touch status=0x81 raw=317,102 mapped=317,102
+I (14666) display: GT touch status=0x81
+I (14667) display: GT raw touch status=0x81 raw=318,100 mapped=318,100
+I (14776) display: GT touch status=0x81
+I (14777) display: GT raw touch status=0x81 raw=318,98 mapped=318,98
+I (14873) display: GT touch status=0x81
+I (14874) display: GT raw touch status=0x81 raw=319,93 mapped=319,93
+I (14907) display: GT touch status=0x81
+I (14908) display: GT raw touch status=0x81 raw=319,93 mapped=319,93
+I (14999) app: FM stream: iq=115/s iq_drop=27/s pcm=74/s drop=34/s ring_drop=34/s write_drop=0/s level=18
+I (15003) display: GT touch status=0x81
+I (15003) display: GT raw touch status=0x81 raw=319,92 mapped=319,92
+I (15100) display: GT touch status=0x81
+I (15101) display: GT raw touch status=0x81 raw=319,92 mapped=319,92
+I (15194) display: GT touch status=0x81
+I (15195) display: GT raw touch status=0x81 raw=319,92 mapped=319,92
+I (15318) display: GT touch status=0x80
+I (15319) display: Touch release
+I (15440) display: GT touch status=0x80
+I (15473) display: GT touch status=0x80
+I (16034) display: GT touch status=0x81
+I (16035) display: GT raw touch status=0x81 raw=378,225 mapped=378,225
+I (16035) display: Touch press 378,225
+I (16146) display: GT touch status=0x81
+I (16147) display: GT raw touch status=0x81 raw=378,225 mapped=378,225
+I (16236) app: FM stream: iq=148/s iq_drop=26/s pcm=84/s drop=37/s ring_drop=37/s write_drop=0/s level=30
+I (16240) display: GT touch status=0x80
+I (16240) display: Touch release
+I (16350) display: GT touch status=0x80
+I (16458) display: GT touch status=0x80
+I (17079) display: GT touch status=0x81
+I (17080) display: GT raw touch status=0x81 raw=500,237 mapped=500,237
+I (17080) display: Touch press 500,237
+I (17122) display: GT touch status=0x81
+I (17123) display: GT raw touch status=0x81 raw=500,237 mapped=500,237
+I (17217) display: GT touch status=0x81
+I (17218) display: GT raw touch status=0x81 raw=500,237 mapped=500,237
+I (17250) app: FM stream: iq=126/s iq_drop=17/s pcm=101/s drop=39/s ring_drop=39/s write_drop=0/s level=34
+I (17252) display: GT touch status=0x80
+I (17253) display: Touch release
+I (17437) display: GT touch status=0x80
+I (17532) display: GT touch status=0x80
+I (17721) display: GT touch status=0x81
+I (17722) display: GT raw touch status=0x81 raw=303,255 mapped=303,255
+I (17722) display: Touch press 303,255
+I (17755) display: GT touch status=0x81
+I (17756) display: GT raw touch status=0x81 raw=303,250 mapped=303,250
+I (17862) display: GT touch status=0x81
+I (17863) display: GT raw touch status=0x81 raw=303,237 mapped=303,237
+I (17959) display: GT touch status=0x81
+I (17960) display: GT raw touch status=0x81 raw=303,230 mapped=303,230
+I (17996) display: GT touch status=0x81
+I (17996) display: GT raw touch status=0x81 raw=303,227 mapped=303,227
+I (18103) display: GT touch status=0x81
+I (18104) display: GT raw touch status=0x81 raw=303,226 mapped=303,226
+I (18214) display: GT touch status=0x81
+I (18215) display: GT raw touch status=0x81 raw=303,226 mapped=303,226
+I (18305) app: FM stream: iq=127/s iq_drop=21/s pcm=85/s drop=34/s ring_drop=34/s write_drop=0/s level=34
+I (18309) display: GT touch status=0x81
+I (18309) display: GT raw touch status=0x81 raw=303,225 mapped=303,225
+I (18403) display: GT touch status=0x80
+I (18404) display: Touch release
+I (18497) display: GT touch status=0x80
+I (18532) display: GT touch status=0x80
+I (18891) display: GT touch status=0x81
+I (18891) display: GT raw touch status=0x81 raw=384,219 mapped=384,219
+I (18892) display: Touch press 384,219
+I (18924) display: GT touch status=0x80
+I (18925) display: Touch release
+I (18970) display: GT touch status=0x80
+I (19073) display: GT touch status=0x80
+I (19317) app: FM stream: iq=120/s iq_drop=23/s pcm=78/s drop=38/s ring_drop=38/s write_drop=0/s level=2
+I (19320) display: GT touch status=0x81
+I (19320) display: GT raw touch status=0x81 raw=428,244 mapped=428,244
+I (19325) display: Touch press 428,244
+I (19417) display: GT touch status=0x81
+I (19418) display: GT raw touch status=0x81 raw=428,244 mapped=428,244
+I (19525) display: GT touch status=0x80
+I (19526) display: Touch release
+I (19649) display: GT touch status=0x80
+I (19742) display: GT touch status=0x80
+I (20003) display: GT touch status=0x81
+I (20004) display: GT raw touch status=0x81 raw=297,248 mapped=297,248
+I (20005) display: Touch press 297,248
+I (20038) display: GT touch status=0x81
+I (20039) display: GT raw touch status=0x81 raw=297,260 mapped=297,260
+I (20072) display: GT touch status=0x81
+I (20073) display: GT raw touch status=0x81 raw=296,295 mapped=296,295
+I (20170) display: GT touch status=0x81
+I (20171) display: GT raw touch status=0x81 raw=295,314 mapped=295,314
+I (20203) display: GT touch status=0x81
+I (20204) display: GT raw touch status=0x81 raw=289,354 mapped=289,354
+I (20237) display: GT touch status=0x81
+I (20238) display: GT raw touch status=0x81 raw=289,355 mapped=289,355
+I (20272) display: GT touch status=0x81
+I (20273) display: GT raw touch status=0x81 raw=289,356 mapped=289,356
+I (20383) display: GT touch status=0x81
+I (20384) display: GT raw touch status=0x81 raw=289,356 mapped=289,356
+I (20491) display: GT touch status=0x81
+I (20492) display: GT raw touch status=0x81 raw=289,358 mapped=289,358
+I (20587) app: FM stream: iq=156/s iq_drop=22/s pcm=85/s drop=34/s ring_drop=34/s write_drop=0/s level=28
+I (20590) display: GT touch status=0x81
+I (20591) display: GT raw touch status=0x81 raw=289,358 mapped=289,358
+I (20675) display: GT touch status=0x81
+I (20676) display: GT raw touch status=0x81 raw=289,360 mapped=289,360
+I (20788) display: GT touch status=0x81
+I (20789) display: GT raw touch status=0x81 raw=289,363 mapped=289,363
+I (20885) display: GT touch status=0x81
+I (20886) display: GT raw touch status=0x81 raw=289,370 mapped=289,370
+I (20920) display: GT touch status=0x81
+I (20921) display: GT raw touch status=0x81 raw=289,373 mapped=289,373
+I (20953) display: GT touch status=0x81
+I (20954) display: GT raw touch status=0x81 raw=289,374 mapped=289,374
+I (21052) display: GT touch status=0x81
+I (21052) display: GT raw touch status=0x81 raw=289,375 mapped=289,375
+I (21085) display: GT touch status=0x81
+I (21086) display: GT raw touch status=0x81 raw=289,375 mapped=289,375
+I (21134) display: GT touch status=0x81
+I (21135) display: GT raw touch status=0x81 raw=289,375 mapped=289,375
+I (21240) display: GT touch status=0x80
+I (21241) display: Touch release
+I (21347) display: GT touch status=0x80
+I (21436) display: GT touch status=0x80
+I (21697) app: FM stream: iq=131/s iq_drop=25/s pcm=101/s drop=35/s ring_drop=35/s write_drop=0/s level=27
+I (21701) display: GT touch status=0x81
+I (21701) display: GT raw touch status=0x81 raw=366,232 mapped=366,232
+I (21706) display: Touch press 366,232
+I (21797) display: GT touch status=0x80
+I (21798) display: Touch release
+I (21904) display: GT touch status=0x80
+I (21938) display: GT touch status=0x80
+I (22197) display: GT touch status=0x81
+I (22198) display: GT raw touch status=0x81 raw=491,273 mapped=491,273
+I (22199) display: Touch press 491,273
+I (22301) display: GT touch status=0x81
+I (22302) display: GT raw touch status=0x81 raw=491,273 mapped=491,273
+I (22335) display: GT touch status=0x80
+I (22336) display: Touch release
+I (22339) display: FM Receiver center frequency applied: 106.200 MHz
+I (22339) display: FM Receiver center frequency set to 106.200 MHz
+I (22377) rtlsdr: RTL-SDR tuned to 106200000 Hz (R82xx)
+I (22377) rtlsdr: TUNED 106.200 MHz
+I (22503) display: GT touch status=0x80
+I (22578) display: GT touch status=0x80
+I (22697) app: FM stream: iq=102/s iq_drop=32/s pcm=75/s drop=32/s ring_drop=32/s write_drop=0/s level=19
+I (23697) app: FM stream: iq=122/s iq_drop=19/s pcm=85/s drop=39/s ring_drop=39/s write_drop=0/s level=23
+I (24697) app: FM stream: iq=129/s iq_drop=12/s pcm=87/s drop=31/s ring_drop=31/s write_drop=0/s level=20
+I (25697) app: FM stream: iq=127/s iq_drop=13/s pcm=80/s drop=39/s ring_drop=39/s write_drop=0/s level=20
+I (26697) app: FM stream: iq=126/s iq_drop=15/s pcm=88/s drop=32/s ring_drop=32/s write_drop=0/s level=20
+I (27697) app: FM stream: iq=128/s iq_drop=13/s pcm=80/s drop=39/s ring_drop=39/s write_drop=0/s level=19
+I (28697) app: FM stream: iq=117/s iq_drop=23/s pcm=78/s drop=38/s ring_drop=38/s write_drop=0/s level=19
+I (29720) app: FM stream: iq=124/s iq_drop=20/s pcm=88/s drop=36/s ring_drop=36/s write_drop=0/s level=22
+I (30735) app: FM stream: iq=131/s iq_drop=12/s pcm=85/s drop=34/s ring_drop=34/s write_drop=0/s level=20
+I (31736) app: FM stream: iq=129/s iq_drop=12/s pcm=86/s drop=40/s ring_drop=40/s write_drop=0/s level=19
+I (32736) app: FM stream: iq=127/s iq_drop=13/s pcm=84/s drop=33/s ring_drop=33/s write_drop=0/s level=21
+I (33736) app: FM stream: iq=128/s iq_drop=13/s pcm=82/s drop=42/s ring_drop=42/s write_drop=0/s level=17
+I (34736) app: FM stream: iq=118/s iq_drop=23/s pcm=78/s drop=38/s ring_drop=38/s write_drop=0/s level=23
+I (35736) app: FM stream: iq=126/s iq_drop=14/s pcm=91/s drop=35/s ring_drop=35/s write_drop=0/s level=18
+I (36736) app: FM stream: iq=129/s iq_drop=12/s pcm=83/s drop=36/s ring_drop=36/s write_drop=0/s level=16
+I (37747) app: FM stream: iq=126/s iq_drop=16/s pcm=87/s drop=36/s ring_drop=36/s write_drop=0/s level=21
+I (38747) app: FM stream: iq=129/s iq_drop=12/s pcm=83/s drop=37/s ring_drop=37/s write_drop=0/s level=19
+I (39757) app: FM stream: iq=126/s iq_drop=16/s pcm=80/s drop=40/s ring_drop=40/s write_drop=0/s level=22
+I (40757) app: FM stream: iq=123/s iq_drop=17/s pcm=86/s drop=41/s ring_drop=41/s write_drop=0/s level=15
+I (41757) app: FM stream: iq=129/s iq_drop=12/s pcm=89/s drop=33/s ring_drop=33/s write_drop=0/s level=19
+I (42757) app: FM stream: iq=128/s iq_drop=13/s pcm=81/s drop=39/s ring_drop=39/s write_drop=0/s level=1
