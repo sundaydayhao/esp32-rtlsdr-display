@@ -7,7 +7,8 @@ page with audio waveform/status UI.
 
 ## Non-Negotiable Build Rule
 
-- Target is `esp32s31`, which is an ESP-IDF preview target.
+- Use ESP-IDF 6.1.x (`idf: "~6.1.0"` in `main/idf_component.yml`).
+- Target is `esp32s31`, which is still a preview target in ESP-IDF v6.1.
 - Always use `idf.py --preview ...` for project commands.
 - Correct build command:
 
@@ -19,14 +20,20 @@ idf.py --preview build
 - Typical setup commands:
 
 ```powershell
-& C:\esp\v6.0.2\esp-idf\export.ps1
-idf.py --preview set-target esp32s31
+& C:\esp\v6.1\esp-idf\export.ps1
 idf.py --preview menuconfig
 idf.py --preview build
 idf.py --preview flash monitor
 ```
 
-- The project has been used with ESP-IDF under `C:\esp\v6.0.2\esp-idf`.
+- The SDK path is `C:\esp\v6.1\esp-idf`; run its `install.ps1 esp32s31`
+  if the v6.1 Python environment or tools are missing.
+- The checked-in configuration already targets ESP32-S31. Use
+  `idf.py --preview set-target esp32s31` only when initializing/resetting the
+  configuration. After switching SDKs, run `idf.py --preview fullclean` before
+  building to remove the previous SDK's build cache.
+- The old SDK directory name was misleading: the previous lockfile and
+  generated configuration recorded IDF 6.2.0. See `docs/IDF_6_1_MIGRATION.md`.
 - The shell is usually PowerShell on Windows. If Unicode warnings appear during
   builds, they are usually console encoding warnings, not necessarily firmware
   build failures.
@@ -81,8 +88,10 @@ idf.py --preview flash monitor
   - Sensors
   - IQ Record
   - Scanner
-- Only Waterfall and FM are currently live receiver pages. The other pages are
-  placeholders/navigation targets.
+- Waterfall and FM are live receiver pages. Current code also includes ADS-B
+  decoding (`main/adsb.c`), segmented scanning, OOK/ASK raw pulse analysis,
+  and SPIFFS IQ recording (512 KiB per capture). These are basic implementations;
+  see `docs/FEATURE_IDEAS.md` for their limits and proposed extensions.
 - `display.c` owns a generic `app_display_t`. Page-specific state is grouped
   into per-page structs, for example Waterfall image/marker/swipe state and FM
   waveform/audio status state.

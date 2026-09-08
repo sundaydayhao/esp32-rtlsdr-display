@@ -7,14 +7,21 @@
 ## 构建
 
 ```powershell
-& C:\esp\v6.0.2\esp-idf\export.ps1
-idf.py --preview set-target esp32s31
+& C:\esp\v6.1\esp-idf\export.ps1
 idf.py --preview menuconfig
 idf.py --preview build
 idf.py --preview flash monitor
 ```
 
-ESP32-S31 支持目前通过 ESP-IDF preview target 暴露，因此本项目的所有 `idf.py` 命令都需要带上 `--preview`。本项目已使用 `C:\esp\v6.0.2\esp-idf` 下的 ESP-IDF v6.2.0 以及 `riscv32-esp-elf` 工具链 `esp-16.1.0_20260609` 验证。
+本项目使用 **ESP-IDF 6.1.x**，组件清单通过 `idf: "~6.1.0"` 限定 SDK 版本。VS Code 使用 `C:\esp\v6.1\esp-idf`。如果环境尚未安装完整，先运行 `& C:\esp\v6.1\esp-idf\install.ps1 esp32s31`，再执行上面的环境激活命令。
+
+**v6.1 中 ESP32-S31 仍然是 preview target，构建和烧录都需要保留 `--preview`。** 官方 [v6.1 发布说明](https://github.com/espressif/esp-idf/releases/tag/v6.1) 和 [目标列表源码](https://github.com/espressif/esp-idf/blob/v6.1/tools/idf_py_actions/constants.py) 均明确这一点；不能因为入门文档中的命令省略该参数就去掉它。
+
+仓库已包含 `esp32s31` 的 `sdkconfig` 和默认配置，无需重复执行 `set-target`。只有首次创建配置或确需切换芯片时才运行 `idf.py --preview set-target esp32s31`，该命令会重置现有配置。切换 SDK 后先执行一次 `idf.py --preview fullclean` 清理旧构建缓存，再执行 `idf.py --preview build`。指定串口烧录可用 `idf.py --preview -p COMx flash monitor`（将 `COMx` 替换为实际串口）。
+
+迁移细节见 [IDF 6.1 迁移记录](docs/IDF_6_1_MIGRATION.md)，后续功能建议见 [功能规划](docs/FEATURE_IDEAS.md)。
+
+2026-09-08 已在 ESP-IDF v6.1 / GCC 15.2.0 下完成清理后的完整构建，固件大小 885,568 字节，1 MiB 应用分区约剩余 16%。此次仅验证构建，未执行上板烧录测试。
 
 重要配置项位于 `RTL-SDR Waterfall` 菜单下：
 
@@ -32,7 +39,7 @@ ESP32-S31 支持目前通过 ESP-IDF preview target 暴露，因此本项目的�
 
 本项目目前验证了 ESP-IDF 路径的完整链路：USB Host 枚举、RTL2832U bulk IN 传输、IQ 缓冲、FFT 处理，以及 RGB LCD 瀑布图绘制。如果没有可用的 RTL-SDR 数据流，程序会绘制合成瀑布图，便于独立测试 LCD 路径。
 
-显示部分现在基于 LVGL，并复刻了 Linux/Qt `rtlsdr-display` 项目的触摸导航。主页提供 ADS-B、FM、Waterfall、Sensors、IQ Record 和 Scanner 功能入口。Waterfall 页面已经接入现有实时 FFT 管线，并支持通过触摸选择标记频率。FM 页面复用同一路 RTL-SDR IQ 数据流进行 WFM/NFM 解调，显示解码后的音频波形、音频电平和输出状态，并可调整共享中心频率。其余功能页已经作为 LVGL 导航目标和状态/配置占位存在，后续还需要实现对应的 ESP32 侧解码、存储或扫描逻辑。
+显示部分现在基于 LVGL，并复刻了 Linux/Qt `rtlsdr-display` 项目的触摸导航。主页提供 ADS-B、FM、Waterfall、Sensors、IQ Record 和 Scanner 功能入口。Waterfall 页面接入实时 FFT 管线，并支持通过触摸选择标记频率。FM 页面复用同一路 RTL-SDR IQ 数据流进行 WFM/NFM 解调，显示音频波形、电平和输出状态。Waterfall 与 FM 各自保存中心频率，进入页面时调谐同一个硬件接收机，FM 扬声器仅在 FM 页启用。当前代码还包含 ADS-B 报文与位置解码、分段频谱扫描、OOK/ASK 原始脉冲分析，以及单次最多 512 KiB 的 SPIFFS IQ 录制基础实现；这些功能的进一步扩展与验收条件见[功能规划](docs/FEATURE_IDEAS.md)。
 
 瀑布图布局参考 ESP32-DIV 的频谱页面：滚动瀑布图上方绘制实时 FFT 概览，水平刻度标出采样跨度的左边缘、中心和右边缘，信号强度使用从蓝/紫到黄/白的 RGB565 调色板。FFT bin 缩放到 LCD 宽度时，每个输出像素列取覆盖范围内的峰值，从而保留窄带峰值。
 

@@ -29,7 +29,7 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 6.2.0
+    version: 6.1.0
   lvgl/lvgl:
     component_hash: 184e532558c1c45fefed631f3e235423d22582aafb4630f3e8885c35281a49ae
     dependencies: []
@@ -42,6 +42,6 @@ direct_dependencies:
 - espressif/usb
 - idf
 - lvgl/lvgl
-manifest_hash: 5fe18201605edd6070ae0b7eedb4523f93c204972e18bf30b884e07074314526
+manifest_hash: 6689c296c2f90d5b1d066abd057d18bda013fc47e2a3502bd28e8db9325ca437
 target: esp32s31
 version: 3.0.0
